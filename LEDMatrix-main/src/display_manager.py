@@ -75,9 +75,10 @@ class DisplayManager:
             options.chain_length = hardware_config.get('chain_length', 2)
             options.parallel = hardware_config.get('parallel', 1)
             options.hardware_mapping = hardware_config.get('hardware_mapping', 'adafruit-hat-pwm')
-            
+
             # Performance and stability settings
-            options.brightness = hardware_config.get('brightness', 90)
+            self._brightness = hardware_config.get('brightness', 90)
+            options.brightness = self._brightness
             options.pwm_bits = hardware_config.get('pwm_bits', 10)
             options.pwm_lsb_nanoseconds = hardware_config.get('pwm_lsb_nanoseconds', 150)
             options.led_rgb_sequence = hardware_config.get('led_rgb_sequence', 'RGB')
@@ -101,6 +102,7 @@ class DisplayManager:
             
             # Initialize the matrix
             self.matrix = RGBMatrix(options=options)
+            self._apply_brightness()
             logger.info("RGB Matrix initialized successfully")
             
             # Create double buffer for smooth updates
@@ -171,6 +173,37 @@ class DisplayManager:
             return self.image.height
         else:
             return 32  # Default fallback height
+
+    def _apply_brightness(self):
+        """Apply the current brightness to the matrix if supported."""
+        if not hasattr(self, '_brightness'):
+            self._brightness = 90
+
+        if hasattr(self, 'matrix') and self.matrix is not None:
+            try:
+                if hasattr(self.matrix, 'SetBrightness'):
+                    self.matrix.SetBrightness(int(self._brightness))
+                else:
+                    self.matrix.brightness = int(self._brightness)
+            except Exception:
+                logger.exception("Failed to apply brightness to matrix")
+
+        return self._brightness
+
+    def adjust_brightness(self, delta: int) -> int | None:
+        """Incrementally adjust brightness (1-100)."""
+        if not hasattr(self, '_brightness'):
+            self._brightness = 90
+
+        new_level = max(1, min(100, int(self._brightness) + int(delta)))
+        self._brightness = new_level
+
+        if hasattr(self, 'matrix') and self.matrix is not None:
+            self._apply_brightness()
+        else:
+            logger.debug("Matrix not initialized; brightness change recorded only")
+
+        return new_level
 
     def _draw_test_pattern(self):
         """Draw a test pattern to verify the display is working."""

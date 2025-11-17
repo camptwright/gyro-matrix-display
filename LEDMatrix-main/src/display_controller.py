@@ -1,6 +1,7 @@
 import time
 import logging
 import sys
+import threading
 from typing import Dict, Any, List
 from datetime import datetime, time as time_obj
 
@@ -79,8 +80,9 @@ class DisplayController:
         logger.info(f"OfTheDay Manager initialized: {'Object' if self.of_the_day else 'None'}")
         logger.info(f"News Manager initialized: {'Object' if self.news_manager else 'None'}")
         logger.info("Display modes initialized in %.3f seconds", time.time() - init_time)
-        
+
         self.force_change = False
+        self._control_lock = threading.Lock()
         # Initialize Music Manager
         music_init_time = time.time()
         self.music_manager = None
@@ -1145,6 +1147,133 @@ class DisplayController:
         has_live_content = is_playing and title != 'Nothing Playing'
 
         return has_live_content
+
+    # ----- External controls (gyro remote hooks) -----
+    def _is_sport_mode(self, mode: str) -> bool:
+        return mode.endswith(('_live', '_recent', '_upcoming'))
+
+    def _mode_family(self, mode: str) -> str:
+        for suffix in ('_live', '_recent', '_upcoming'):
+            if mode.endswith(suffix):
+                return mode[: -len(suffix)]
+        return mode
+
+    def _set_mode(self, mode: str) -> bool:
+        if mode not in self.available_modes:
+            return False
+
+        with self._control_lock:
+            self.current_mode_index = self.available_modes.index(mode)
+            if (
+                self.current_display_mode == 'music'
+                and self.music_manager
+                and mode != 'music'
+            ):
+                self.music_manager.deactivate_music_display()
+            self.current_display_mode = mode
+            if hasattr(self, '_last_logged_duration'):
+                delattr(self, '_last_logged_duration')
+            self.force_clear = True
+            self.last_switch = time.time()
+
+        logger.info(f"[Remote] Switched to {mode}")
+        return True
+
+    def _step_modes(self, step: int, pool: List[str] | None = None) -> bool:
+        if not self.available_modes:
+            return False
+
+        modes_list = list(self.available_modes) if pool is None else [
+            mode for mode in self.available_modes if mode in set(pool)
+        ]
+
+        if not modes_list:
+            return False
+
+        current_mode = self.current_display_mode
+        if current_mode not in modes_list:
+            target_index = 0 if step > 0 else len(modes_list) - 1
+        else:
+            current_index = modes_list.index(current_mode)
+            target_index = (current_index + step) % len(modes_list)
+
+        target_mode = modes_list[target_index]
+        return self._set_mode(target_mode)
+
+    def cycle_game_mode(self, step: int) -> bool:
+        """Rotate within the current sport family (live/recent/upcoming)."""
+        family = self._mode_family(self.current_display_mode)
+        family_modes = [
+            mode for mode in self.available_modes
+            if self._mode_family(mode) == family and self._is_sport_mode(mode)
+        ]
+
+        if not family_modes:
+            logger.info("[Remote] No sport-specific modes available for cycling")
+            return False
+
+        return self._step_modes(step, family_modes)
+
+    def cycle_sport_mode(self, step: int) -> bool:
+        """Rotate to the next sport, preferring live -> recent -> upcoming."""
+        sport_modes = [mode for mode in self.available_modes if self._is_sport_mode(mode)]
+        if not sport_modes:
+            logger.info("[Remote] No sport modes enabled")
+            return False
+
+        sport_order: List[str] = []
+        for mode in sport_modes:
+            base = self._mode_family(mode)
+            if base not in sport_order:
+                sport_order.append(base)
+
+        current_base = self._mode_family(self.current_display_mode)
+        if current_base not in sport_order:
+            target_base = sport_order[0] if step > 0 else sport_order[-1]
+        else:
+            current_index = sport_order.index(current_base)
+            target_base = sport_order[(current_index + step) % len(sport_order)]
+
+        preferred_modes = [
+            f"{target_base}{suffix}"
+            for suffix in ('_live', '_recent', '_upcoming')
+            if f"{target_base}{suffix}" in self.available_modes
+        ]
+        target_mode = preferred_modes[0] if preferred_modes else None
+
+        if not target_mode:
+            target_mode = next(
+                (mode for mode in sport_modes if self._mode_family(mode) == target_base),
+                None
+            )
+
+        if not target_mode:
+            logger.info(f"[Remote] No mode found for sport {target_base}")
+            return False
+
+        return self._set_mode(target_mode)
+
+    def adjust_brightness(self, delta: int) -> int | None:
+        if not self.display_manager:
+            return None
+
+        new_level = self.display_manager.adjust_brightness(delta)
+        if new_level is not None:
+            logger.info(f"[Remote] Brightness set to {new_level}%")
+        else:
+            logger.warning("[Remote] Unable to adjust brightness (matrix not initialized)")
+        return new_level
+
+    def adjust_volume(self, delta: int) -> None:
+        if self.music_manager and hasattr(self.music_manager, 'adjust_volume'):
+            try:
+                self.music_manager.adjust_volume(delta)
+                logger.info(f"[Remote] Adjusted music volume by {delta}")
+                return
+            except Exception:
+                logger.exception("[Remote] Failed to adjust music volume")
+
+        logger.info(f"[Remote] Audio control requested (delta={delta})")
 
     def run(self):
         """Run the display controller, switching between displays."""

@@ -1,7 +1,19 @@
 import asyncio
+import os
+import sys
+import threading
 from types import SimpleNamespace
 from uuid import UUID
+
 from bleak import BleakScanner, BleakClient
+
+# Make the LED matrix package importable
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+LED_MATRIX_DIR = os.path.join(ROOT_DIR, "LEDMatrix-main")
+if LED_MATRIX_DIR not in sys.path:
+    sys.path.append(LED_MATRIX_DIR)
+
+from src.display_controller import DisplayController
 
 # --- BLE (Nordic UART) ---
 NUS_SERVICE = UUID("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
@@ -29,15 +41,67 @@ COOLDOWN_MS    = 300
 YAW_SIGN   = +1.0
 PITCH_SIGN = +1.0
 
-# ----- your matrix-display hooks (replace prints with real calls) -----
-def next_game():        print("next game", flush=True)
-def prev_game():        print("previous game", flush=True)
-def next_sport():       print("next sport", flush=True)
-def prev_sport():       print("previous sport", flush=True)
-def audio_up():         print("audio up", flush=True)
-def audio_down():       print("audio down", flush=True)
-def brightness_up():    print("brightness up", flush=True)
-def brightness_down():  print("brightness down", flush=True)
+display_controller: DisplayController | None = None
+display_thread: threading.Thread | None = None
+
+
+def _ensure_display_controller():
+    global display_controller, display_thread
+    if display_controller is None:
+        display_controller = DisplayController()
+        display_thread = threading.Thread(
+            target=display_controller.run, name="display-controller", daemon=True
+        )
+        display_thread.start()
+
+
+# ----- LED matrix hooks -----
+def next_game():
+    _ensure_display_controller()
+    if display_controller:
+        display_controller.cycle_game_mode(1)
+
+
+def prev_game():
+    _ensure_display_controller()
+    if display_controller:
+        display_controller.cycle_game_mode(-1)
+
+
+def next_sport():
+    _ensure_display_controller()
+    if display_controller:
+        display_controller.cycle_sport_mode(1)
+
+
+def prev_sport():
+    _ensure_display_controller()
+    if display_controller:
+        display_controller.cycle_sport_mode(-1)
+
+
+def audio_up():
+    _ensure_display_controller()
+    if display_controller:
+        display_controller.adjust_volume(5)
+
+
+def audio_down():
+    _ensure_display_controller()
+    if display_controller:
+        display_controller.adjust_volume(-5)
+
+
+def brightness_up():
+    _ensure_display_controller()
+    if display_controller:
+        display_controller.adjust_brightness(5)
+
+
+def brightness_down():
+    _ensure_display_controller()
+    if display_controller:
+        display_controller.adjust_brightness(-5)
 
 # ----- helpers -----
 def ema(prev, x, a, have_prev): return (a*x + (1.0-a)*prev) if have_prev else x
