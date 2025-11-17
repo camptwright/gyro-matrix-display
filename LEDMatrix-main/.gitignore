@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets
+config/config_secrets.json
+config/config.json
+config/config.json.backup
+credentials.json
+token.pickle
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo 
+emulator_config.json
+
+# Cache directory
+cache/
