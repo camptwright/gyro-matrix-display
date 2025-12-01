@@ -1,0 +1,29 @@
+[Unit]
+Description=Matrix Display Controller with Gyroscopic Control
+After=network.target bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=raspberrypi
+WorkingDirectory=/home/raspberrypi/matrix-display
+# Update this path if using virtual environment: /home/raspberrypi/matrix-display/venv/bin/python3
+ExecStart=/usr/bin/python3 /home/raspberrypi/matrix-display/receiver.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/raspberrypi
+Environment=USER=raspberrypi
+
+# Note: To eliminate realtime priority warnings, run:
+#   python3_path=$(which python3)
+#   sudo setcap 'cap_sys_nice=eip' $python3_path
+# This allows Python to set realtime thread priority without running as root.
+
+[Install]
+WantedBy=multi-user.target
+

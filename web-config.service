@@ -1,0 +1,21 @@
+[Unit]
+Description=Matrix Display Web Configuration Interface
+After=network.target
+
+[Service]
+Type=simple
+User=raspberrypi
+WorkingDirectory=/home/raspberrypi/matrix-display
+# Update this path if using virtual environment: /home/raspberrypi/matrix-display/venv/bin/python3
+ExecStart=/usr/bin/python3 /home/raspberrypi/matrix-display/web_config.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+
