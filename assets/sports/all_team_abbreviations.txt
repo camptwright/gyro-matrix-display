@@ -1,0 +1,972 @@
+NCAAF
+  AMH => Amherst Mammoths
+  ANN => Anna Maria College Amcats
+  ARIZ => Arizona Wildcats
+  ARK => Arkansas Razorbacks
+  ASU => Arizona State Sun Devils
+  AUB => Auburn Tigers
+  BOIS => Boise State Broncos
+  BRST => Bridgewater State Bears
+  BUENA => Buena Vista Beavers
+  CAL => California Golden Bears
+  CAR => Carroll University (WI) Pioneers
+  CLA => Claremont-Mudd-Scripps College Stags
+  COLBY => Colby College White Mules
+  COLO => Colorado Buffaloes
+  CONN => UConn Huskies
+  CP => Cal Poly Mustangs
+  CSU => Colorado State Rams
+  CUR => Curry College Colonels
+  DEL => Delaware Blue Hens
+  DUB => Dubuque Spartans
+  ELM => Elmhurst Bluejays
+  FAMU => Florida A&M Rattlers
+  FLA => Florida Gators
+  FSU => Florida State Seminoles
+  GRI => Grinnell Pioneers
+  GT => Georgia Tech Yellow Jackets
+  GTWN => Georgetown Hoyas
+  HAW => Hawai'i Rainbow Warriors
+  HOW => Howard Bison
+  IDHO => Idaho Vandals
+  ISU => Iowa State Cyclones
+  JXST => Jacksonville State Gamecocks
+  LUT => Luther Norse
+  MESA => Colorado Mesa Mavericks
+  MIL => Millikin Big Blue
+  MOR => Morehouse College Maroon Tigers
+  NOR => North Park Vikings
+  RED => Redlands Bulldogs
+  SAC => Sacramento State Hornets
+  SDSU => San Diego State Aztecs
+  SJSU => San José State Spartans
+  STAN => Stanford Cardinal
+  STET => Stetson Hatters
+  UAB => UAB Blazers
+  UCLA => UCLA Bruins
+  UGA => Georgia Bulldogs
+  USA => South Alabama Jaguars
+  USC => USC Trojans
+  USF => South Florida Bulls
+  YALE => Yale Bulldogs
+
+NBA
+  ATL => Atlanta Hawks
+  BKN => Brooklyn Nets
+  BOS => Boston Celtics
+  CHA => Charlotte Hornets
+  CHI => Chicago Bulls
+  CLE => Cleveland Cavaliers
+  DAL => Dallas Mavericks
+  DEN => Denver Nuggets
+  DET => Detroit Pistons
+  GS => Golden State Warriors
+  HOU => Houston Rockets
+  IND => Indiana Pacers
+  LAC => LA Clippers
+  LAL => Los Angeles Lakers
+  MEM => Memphis Grizzlies
+  MIA => Miami Heat
+  MIL => Milwaukee Bucks
+  MIN => Minnesota Timberwolves
+  NO => New Orleans Pelicans
+  NY => New York Knicks
+  OKC => Oklahoma City Thunder
+  ORL => Orlando Magic
+  PHI => Philadelphia 76ers
+  PHX => Phoenix Suns
+  POR => Portland Trail Blazers
+  SA => San Antonio Spurs
+  SAC => Sacramento Kings
+  TOR => Toronto Raptors
+  UTAH => Utah Jazz
+  WSH => Washington Wizards
+
+NFL
+  ARI => Arizona Cardinals
+  ATL => Atlanta Falcons
+  BAL => Baltimore Ravens
+  BUF => Buffalo Bills
+  CAR => Carolina Panthers
+  CHI => Chicago Bears
+  CIN => Cincinnati Bengals
+  CLE => Cleveland Browns
+  DAL => Dallas Cowboys
+  DEN => Denver Broncos
+  DET => Detroit Lions
+  GB => Green Bay Packers
+  HOU => Houston Texans
+  IND => Indianapolis Colts
+  JAX => Jacksonville Jaguars
+  KC => Kansas City Chiefs
+  LAC => Los Angeles Chargers
+  LAR => Los Angeles Rams
+  LV => Las Vegas Raiders
+  MIA => Miami Dolphins
+  MIN => Minnesota Vikings
+  NE => New England Patriots
+  NO => New Orleans Saints
+  NYG => New York Giants
+  NYJ => New York Jets
+  PHI => Philadelphia Eagles
+  PIT => Pittsburgh Steelers
+  SEA => Seattle Seahawks
+  SF => San Francisco 49ers
+  TB => Tampa Bay Buccaneers
+  TEN => Tennessee Titans
+  WSH => Washington
+
+NCAA BASKETBALL
+  AAMU => Alabama A&M Bulldogs
+  ACU => Abilene Christian Wildcats
+  AFA => Air Force Falcons
+  AKR => Akron Zips
+  ALA => Alabama Crimson Tide
+  ALB => Albany Great Danes
+  ALCN => Alcorn State Braves
+  ALST => Alabama State Hornets
+  AMCC => Texas A&M-CC Islanders
+  AMER => American Eagles
+  APP => Appalachian State Mountaineers
+  APSU => Austin Peay Governors
+  ARIZ => Arizona Wildcats
+  ARK => Arkansas Razorbacks
+  ARMY => Army Black Knights
+  ARST => Arkansas State Red Wolves
+  ASU => Arizona State Sun Devils
+  AUB => Auburn Tigers
+  BALL => Ball State Cardinals
+  BAY => Baylor Bears
+  BC => Boston College Eagles
+  BEL => Belmont Bruins
+  BELL => Bellarmine Knights
+  BGSU => Bowling Green Falcons
+  BING => Binghamton Bearcats
+  BRAD => Bradley Braves
+  BRWN => Brown Bears
+  BRY => Bryant Bulldogs
+  BSU => Boise State Broncos
+  BU => Boston University Terriers
+  BUCK => Bucknell Bison
+  BUFF => Buffalo Bulls
+  BUT => Butler Bulldogs
+  BYU => BYU Cougars
+  CAL => California Golden Bears
+  CAM => Campbell Fighting Camels
+  CAN => Canisius Golden Griffins
+  CCAR => Coastal Carolina Chanticleers
+  CCSU => Central Connecticut Blue Devils
+  CHAR => Charlotte 49ers
+  CHIC => Chicago State Cougars
+  CHSO => Charleston Southern Buccaneers
+  CIN => Cincinnati Bearcats
+  CLEM => Clemson Tigers
+  CLEV => Cleveland State Vikings
+  CLMB => Columbia Lions
+  CMU => Central Michigan Chippewas
+  COFC => Charleston Cougars
+  COLG => Colgate Raiders
+  COLO => Colorado Buffaloes
+  CONN => UConn Huskies
+  COPP => Coppin State Eagles
+  COR => Cornell Big Red
+  CP => Cal Poly Mustangs
+  CREI => Creighton Bluejays
+  CSU => Colorado State Rams
+  CSUB => CSU Bakersfield Roadrunners
+  CSUF => CSU Fullerton Titans
+  CSUN => CSU Northridge Matadors
+  DART => Dartmouth Big Green
+  DAV => Davidson Wildcats
+  DAY => Dayton Flyers
+  DEL => Delaware Blue Hens
+  DEN => Denver Pioneers
+  DEP => DePaul Blue Demons
+  DET => Detroit Mercy Titans
+  DREX => Drexel Dragons
+  DRKE => Drake Bulldogs
+  DSU => Delaware State Hornets
+  DUKE => Duke Blue Devils
+  DUQ => Duquesne Dukes
+  ECU => East Carolina Pirates
+  EIU => Eastern Illinois Panthers
+  EKU => Eastern Kentucky Colonels
+  ELON => Elon Phoenix
+  EMU => Eastern Michigan Eagles
+  ETSU => East Tennessee State Buccaneers
+  EVAN => Evansville Purple Aces
+  EWU => Eastern Washington Eagles
+  FAIR => Fairfield Stags
+  FAMU => Florida A&M Rattlers
+  FAU => Florida Atlantic Owls
+  FDU => Fairleigh Dickinson Knights
+  FGCU => Florida Gulf Coast Eagles
+  FIU => Florida International Panthers
+  FLA => Florida Gators
+  FOR => Fordham Rams
+  FRES => Fresno State Bulldogs
+  FSU => Florida State Seminoles
+  FUR => Furman Paladins
+  GASO => Georgia Southern Eagles
+  GAST => Georgia State Panthers
+  GB => Green Bay Phoenix
+  GCU => Grand Canyon Antelopes
+  GMU => George Mason Patriots
+  GONZ => Gonzaga Bulldogs
+  GT => Georgia Tech Yellow Jackets
+  GTWN => Georgetown Hoyas
+  GW => George Washington Colonials
+  GWEB => Gardner-Webb Bulldogs
+  HALL => Seton Hall Pirates
+  HAMP => Hampton Pirates
+  HART => Hartford Hawks
+  HARV => Harvard Crimson
+  HAW => Hawai'i Rainbow Warriors
+  HBU => Houston Baptist Huskies
+  HC => Holy Cross Crusaders
+  HOF => Hofstra Pride
+  HOU => Houston Cougars
+  HOW => Howard Bison
+  HP => High Point Panthers
+  IDHO => Idaho Vandals
+  IDST => Idaho State Bengals
+  ILL => Illinois Fighting Illini
+  ILST => Illinois State Redbirds
+  INST => Indiana State Sycamores
+  IONA => Iona Gaels
+  IOWA => Iowa Hawkeyes
+  ISU => Iowa State Cyclones
+  IU => Indiana Hoosiers
+  IUPU => IUPUI Jaguars
+  JAX => Jacksonville Dolphins
+  JKST => Jackson State Tigers
+  JMU => James Madison Dukes
+  JOES => Saint Joseph's Hawks
+  JVST => Jacksonville State Gamecocks
+  KENN => Kennesaw State Owls
+  KENT => Kent State Golden Flashes
+  KSU => Kansas State Wildcats
+  KU => Kansas Jayhawks
+  L-MD => Loyola (MD) Greyhounds
+  LAF => Lafayette Leopards
+  LAM => Lamar Cardinals
+  LAS => La Salle Explorers
+  LBSU => Long Beach State Beach
+  LEH => Lehigh Mountain Hawks
+  LIB => Liberty Flames
+  LIP => Lipscomb Bisons
+  LIU => Long Island University Sharks
+  LMU => Loyola Marymount Lions
+  LONG => Longwood Lancers
+  LOU => Louisville Cardinals
+  LSU => LSU Tigers
+  LT => Louisiana Tech Bulldogs
+  LUC => Loyola Chicago Ramblers
+  M-OH => Miami (OH) Redhawks
+  MAN => Manhattan Jaspers
+  MARQ => Marquette Golden Eagles
+  MASS => UMass Minutemen
+  MD => Maryland Terrapins
+  ME => Maine Black Bears
+  MEM => Memphis Tigers
+  MIA => Miami Hurricanes
+  MICH => Michigan Wolverines
+  MILW => Milwaukee Panthers
+  MINN => Minnesota Golden Gophers
+  MISS => Ole Miss Rebels
+  MIZ => Missouri Tigers
+  MONM => Monmouth Hawks
+  MONT => Montana Grizzlies
+  MORE => Morehead State Eagles
+  MORG => Morgan St Bears
+  MOST => Missouri State Bears
+  MRMK => Merrimack Warriors
+  MRSH => Marshall Thundering Herd
+  MRST => Marist Red Foxes
+  MSM => Mount St. Mary's Mountaineers
+  MSST => Mississippi State Bulldogs
+  MSU => Michigan State Spartans
+  MTST => Montana State Bobcats
+  MTU => Middle Tennessee Blue Raiders
+  MUR => Murray State Racers
+  NAU => Northern Arizona Lumberjacks
+  NAVY => Navy Midshipmen
+  NCAT => North Carolina A&T Aggies
+  NCCU => North Carolina Central Eagles
+  NCST => NC State Wolfpack
+  ND => Notre Dame Fighting Irish
+  NE => Northeastern Huskies
+  NEB => Nebraska Cornhuskers
+  NEV => Nevada Wolf Pack
+  NIAG => Niagara Purple Eagles
+  NIU => Northern Illinois Huskies
+  NJIT => NJIT Highlanders
+  NKU => Northern Kentucky Norse
+  NMSU => New Mexico State Aggies
+  NORF => Norfolk St Spartans
+  NW => Northwestern Wildcats
+  OAK => Oakland Golden Grizzlies
+  ODU => Old Dominion Monarchs
+  OHIO => Ohio Bobcats
+  OKST => Oklahoma State Cowboys
+  ORE => Oregon Ducks
+  ORST => Oregon State Beavers
+  ORU => Oral Roberts Golden Eagles
+  OSU => Ohio State Buckeyes
+  OU => Oklahoma Sooners
+  PAC => Pacific Tigers
+  PENN => Pennsylvania Quakers
+  PFW => Purdue Fort Wayne Mastodons
+  PITT => Pittsburgh Panthers
+  PRES => Presbyterian Blue Hose
+  PRIN => Princeton Tigers
+  PROV => Providence Friars
+  PRST => Portland State Vikings
+  PSU => Penn State Nittany Lions
+  PUR => Purdue Boilermakers
+  QUIN => Quinnipiac Bobcats
+  RAD => Radford Highlanders
+  RICE => Rice Owls
+  RICH => Richmond Spiders
+  RID => Rider Broncs
+  RMU => Robert Morris Colonials
+  RUTG => Rutgers Scarlet Knights
+  SAC => Sacramento State Hornets
+  SBU => St. Bonaventure Bonnies
+  SC => South Carolina Gamecocks
+  SCST => South Carolina State Bulldogs
+  SCUP => South Carolina Upstate Spartans
+  SDAK => South Dakota Coyotes
+  SDSU => San Diego State Aztecs
+  SEMO => Southeast Missouri State Redhawks
+  SFBK => St. Francis (BKN) Terriers
+  SFPA => St. Francis (PA) Red Flash
+  SHU => Sacred Heart Pioneers
+  SIE => Siena Saints
+  SIU => Southern Illinois Salukis
+  SIUE => SIU Edwardsville Cougars
+  SJSU => San José St Spartans
+  SJU => St. John's Red Storm
+  SLU => Saint Louis Billikens
+  SMU => SMU Mustangs
+  SPU => Saint Peter's Peacocks
+  STAN => Stanford Cardinal
+  STBK => Stony Brook Seawolves
+  STET => Stetson Hatters
+  SUU => Southern Utah Thunderbirds
+  SYR => Syracuse Orange
+  TA&M => Texas A&M Aggies
+  TCU => TCU Horned Frogs
+  TEM => Temple Owls
+  TENN => Tennessee Volunteers
+  TEX => Texas Longhorns
+  TLSA => Tulsa Golden Hurricane
+  TNST => Tennessee State Tigers
+  TNTC => Tennessee Tech Golden Eagles
+  TOL => Toledo Rockets
+  TOW => Towson Tigers
+  TTU => Texas Tech Red Raiders
+  TULN => Tulane Green Wave
+  TXST => Texas State Bobcats
+  UAB => UAB Blazers
+  UALR => Little Rock Trojans
+  UAPB => Arkansas-Pine Bluff Golden Lions
+  UCA => Central Arkansas Bears
+  UCD => UC Davis Aggies
+  UCF => UCF Knights
+  UCI => UC Irvine Anteaters
+  UCLA => UCLA Bruins
+  UCR => UC Riverside Highlanders
+  UCSB => UC Santa Barbara Gauchos
+  UCSD => UC San Diego Tritons
+  UGA => Georgia Bulldogs
+  UIC => UIC Flames
+  UK => Kentucky Wildcats
+  ULL => Louisiana Ragin' Cajuns
+  UMBC => UMBC Retrievers
+  UMKC => UM Kansas City Roos
+  UML => UMass Lowell River Hawks
+  UNA => North Alabama Lions
+  UNC => North Carolina Tar Heels
+  UNCA => UNC Asheville Bulldogs
+  UNCO => Northern Colorado Bears
+  UNCW => UNC Wilmington Seahawks
+  UND => North Dakota Fighting Hawks
+  UNF => North Florida Ospreys
+  UNH => New Hampshire Wildcats
+  UNI => Northern Iowa Panthers
+  UNLV => UNLV Rebels
+  UNM => New Mexico Lobos
+  UNT => North Texas Mean Green
+  URI => Rhode Island Rams
+  USA => South Alabama Jaguars
+  USC => USC Trojans
+  USD => San Diego Toreros
+  USF => South Florida Bulls
+  USM => Southern Miss Golden Eagles
+  USU => Utah State Aggies
+  UTA => UT Arlington Mavericks
+  UTAH => Utah Utes
+  UTC => Chattanooga Mocs
+  UTEP => UTEP Miners
+  UTM => UT Martin Skyhawks
+  UTRGV => UT Rio Grande Valley Vaqueros
+  UTSA => UTSA Roadrunners
+  UVA => Virginia Cavaliers
+  UVM => Vermont Catamounts
+  VALP => Valparaiso
+  VAN => Vanderbilt Commodores
+  VCU => VCU Rams
+  VILL => Villanova Wildcats
+  VT => Virginia Tech Hokies
+  W&M => William & Mary Tribe
+  WAG => Wagner Seahawks
+  WAKE => Wake Forest Demon Deacons
+  WASH => Washington Huskies
+  WEB => Weber State Wildcats
+  WICH => Wichita State Shockers
+  WIN => Winthrop Eagles
+  WISC => Wisconsin Badgers
+  WKU => Western Kentucky Hilltoppers
+  WMU => Western Michigan Broncos
+  WRST => Wright State Raiders
+  WSU => Washington State Cougars
+  WVU => West Virginia Mountaineers
+  WYO => Wyoming Cowboys
+  XAV => Xavier Musketeers
+  YALE => Yale Bulldogs
+  YSU => Youngstown State Penguins
+
+MLB
+  ARI => Arizona Diamondbacks
+  ATL => Atlanta Braves
+  BAL => Baltimore Orioles
+  BOS => Boston Red Sox
+  CHC => Chicago Cubs
+  CHW => Chicago White Sox
+  CIN => Cincinnati Reds
+  CLE => Cleveland Indians
+  COL => Colorado Rockies
+  DET => Detroit Tigers
+  HOU => Houston Astros
+  KC => Kansas City Royals
+  LAA => Los Angeles Angels
+  LAD => Los Angeles Dodgers
+  MIA => Miami Marlins
+  MIL => Milwaukee Brewers
+  MIN => Minnesota Twins
+  NYM => New York Mets
+  NYY => New York Yankees
+  OAK => Oakland Athletics
+  PHI => Philadelphia Phillies
+  PIT => Pittsburgh Pirates
+  SD => San Diego Padres
+  SEA => Seattle Mariners
+  SF => San Francisco Giants
+  STL => St. Louis Cardinals
+  TB => Tampa Bay Rays
+  TEX => Texas Rangers
+  TOR => Toronto Blue Jays
+  WSH => Washington Nationals
+
+MLS
+  ATL => Atlanta United FC
+  ATX => Austin FC
+  CHI => Chicago Fire FC
+  CIN => FC Cincinnati
+  CLB => Columbus Crew
+  COL => Colorado Rapids
+  DAL => FC Dallas
+  DC => DC United
+  HOU => Houston Dynamo FC
+  LA => LA Galaxy
+  LAFC => LAFC
+  MIA => Inter Miami CF
+  MIN => Minnesota United FC
+  MTL => CF Montréal
+  NE => New England Revolution
+  NSH => Nashville SC
+  NY => New York Red Bulls
+  NYC => New York City FC
+  ORL => Orlando City SC
+  PHI => Philadelphia Union
+  POR => Portland Timbers
+  RSL => Real Salt Lake
+  SEA => Seattle Sounders FC
+  SJ => San Jose Earthquakes
+  SKC => Sporting Kansas City
+  TOR => Toronto FC
+  VAN => Vancouver Whitecaps
+
+NHL
+  ANA => Anaheim Ducks
+  ARI => Arizona Coyotes
+  BOS => Boston Bruins
+  BUF => Buffalo Sabres
+  CAR => Carolina Hurricanes
+  CBJ => Columbus Blue Jackets
+  CGY => Calgary Flames
+  CHI => Chicago Blackhawks
+  COL => Colorado Avalanche
+  DAL => Dallas Stars
+  DET => Detroit Red Wings
+  EDM => Edmonton Oilers
+  FLA => Florida Panthers
+  LA => Los Angeles Kings
+  MIN => Minnesota Wild
+  MTL => Montreal Canadiens
+  NJ => New Jersey Devils
+  NSH => Nashville Predators
+  NYI => New York Islanders
+  NYR => New York Rangers
+  OTT => Ottawa Senators
+  PHI => Philadelphia Flyers
+  PIT => Pittsburgh Penguins
+  SEA => Seattle Kraken
+  SJ => San Jose Sharks
+  STL => St. Louis Blues
+  TB => Tampa Bay Lightning
+  TOR => Toronto Maple Leafs
+  VAN => Vancouver Canucks
+  VGS => Vegas Golden Knights
+  WPG => Winnipeg Jets
+  WSH => Washington Capitals
+
+NCAAF Conferences/Divisions
+  Conferences currently unsupported
+
+NBA Conferences/Divisions
+  East_SE
+    ATL => Atlanta Hawks
+    CHA => Charlotte Hornets
+    MIA => Miami Heat
+    ORL => Orlando Magic
+    WSH => Washington Wizards
+  East_AT
+    BKN => Brooklyn Nets
+    BOS => Boston Celtics
+    NY => New York Knicks
+    PHI => Philadelphia 76ers
+    TOR => Toronto Raptors
+  East_CE
+    CHI => Chicago Bulls
+    CLE => Cleveland Cavaliers
+    DET => Detroit Pistons
+    IND => Indiana Pacers
+    MIL => Milwaukee Bucks
+  West_SW
+    DAL => Dallas Mavericks
+    HOU => Houston Rockets
+    MEM => Memphis Grizzlies
+    NO => New Orleans Pelicans
+    SA => San Antonio Spurs
+  West_NW
+    DEN => Denver Nuggets
+    MIN => Minnesota Timberwolves
+    OKC => Oklahoma City Thunder
+    POR => Portland Trail Blazers
+    UTAH => Utah Jazz
+  West_PA
+    GS => Golden State Warriors
+    LAC => LA Clippers
+    LAL => Los Angeles Lakers
+    PHX => Phoenix Suns
+    SAC => Sacramento Kings
+NFL Conferences/Divisions
+  AFC_SOUTH
+    HOU => Houston Texans
+    IND => Indianapolis Colts
+    JAX => Jacksonville Jaguars
+    TEN => Tennessee Titans
+  NFC_WEST
+    ARI => Arizona Cardinals
+    LAR => Los Angeles Rams
+    SEA => Seattle Seahawks
+    SF => San Francisco 49ers
+  NFC_SOUTH
+    ATL => Atlanta Falcons
+    CAR => Carolina Panthers
+    NO => New Orleans Saints
+    TB => Tampa Bay Buccaneers
+  AFC_NORTH
+    BAL => Baltimore Ravens
+    CIN => Cincinnati Bengals
+    CLE => Cleveland Browns
+    PIT => Pittsburgh Steelers
+  AFC_EAST
+    BUF => Buffalo Bills
+    MIA => Miami Dolphins
+    NE => New England Patriots
+    NYJ => New York Jets
+  NFC_NORTH
+    CHI => Chicago Bears
+    DET => Detroit Lions
+    GB => Green Bay Packers
+    MIN => Minnesota Vikings
+  NFC_EAST
+    DAL => Dallas Cowboys
+    NYG => New York Giants
+    PHI => Philadelphia Eagles
+    WSH => Washington
+  AFC_WEST
+    DEN => Denver Broncos
+    KC => Kansas City Chiefs
+    LAC => Los Angeles Chargers
+    LV => Las Vegas Raiders
+NCAA BASKETBALL Conferences/Divisions
+  NCAA_pat
+    NAVY => Navy Midshipmen
+  NCAA_aac
+    SMU => SMU Mustangs
+    TULN => Tulane Green Wave
+    WICH => Wichita State Shockers
+  NCAA_atl10
+    JOES => Saint Joseph's Hawks
+    VCU => VCU Rams
+  NCAA_meac
+    MORG => Morgan St Bears
+    NCAT => North Carolina A&T Aggies
+    NCCU => North Carolina Central Eagles
+    NORF => Norfolk St Spartans
+    SCST => South Carolina State Bulldogs
+  NCAA_mvc
+    MOST => Missouri State Bears
+    UNI => Northern Iowa Panthers
+    VALP => Valparaiso
+  NCAA_midam
+    NIU => Northern Illinois Huskies
+    TOL => Toledo Rockets
+    WMU => Western Michigan Broncos
+  NCAA_big12
+    TCU => TCU Horned Frogs
+    TTU => Texas Tech Red Raiders
+  NCAA_neast
+    BRY => Bryant Bulldogs
+    LIU => Long Island University Sharks
+    MRMK => Merrimack Warriors
+    SFBK => St. Francis (BKN) Terriers
+    SFPA => St. Francis (PA) Red Flash
+    SHU => Sacred Heart Pioneers
+    WAG => Wagner Seahawks
+  NCAA_bige
+    HALL => Seton Hall Pirates
+    PROV => Providence Friars
+    SJU => St. John's Red Storm
+    XAV => Xavier Musketeers
+  NCAA_bsky
+    NAU => Northern Arizona Lumberjacks
+    PRST => Portland State Vikings
+    UNCO => Northern Colorado Bears
+    WEB => Weber State Wildcats
+  NCAA_mwest
+    NEV => Nevada Wolf Pack
+    UNLV => UNLV Rebels
+    WYO => Wyoming Cowboys
+  NCAA_aeast
+    NJIT => NJIT Highlanders
+    STBK => Stony Brook Seawolves
+    UMBC => UMBC Retrievers
+  NCAA_pac12
+    ORE => Oregon Ducks
+  NCAA_bsou
+    PRES => Presbyterian Blue Hose
+    RAD => Radford Highlanders
+    SCUP => South Carolina Upstate Spartans
+    UNCA => UNC Asheville Bulldogs
+    WIN => Winthrop Eagles
+  NCAA_big10
+    PUR => Purdue Boilermakers
+  NCAA_maac
+    MAN => Manhattan Jaspers
+    MONM => Monmouth Hawks
+    MRST => Marist Red Foxes
+    QUIN => Quinnipiac Bobcats
+    RID => Rider Broncs
+    SIE => Siena Saints
+    SPU => Saint Peter's Peacocks
+  NCAA_acc
+    MIA => Miami Hurricanes
+  NCAA_a-sun
+    UNA => North Alabama Lions
+    UNF => North Florida Ospreys
+  NCAA_hor
+    GB => Green Bay Phoenix
+    OAK => Oakland Golden Grizzlies
+    PFW => Purdue Fort Wayne Mastodons
+    RMU => Robert Morris Colonials
+    WRST => Wright State Raiders
+    YSU => Youngstown State Penguins
+  NCAA_ovc
+    MORE => Morehead State Eagles
+    SEMO => Southeast Missouri State Redhawks
+    SIUE => SIU Edwardsville Cougars
+    TNST => Tennessee State Tigers
+    TNTC => Tennessee Tech Golden Eagles
+    UTM => UT Martin Skyhawks
+  NCAA_sec
+    SC => South Carolina Gamecocks
+    TENN => Tennessee Volunteers
+  NCAA_col
+    W&M => William & Mary Tribe
+  NCAA_usa
+    CHAR => Charlotte 49ers
+    MTU => Middle Tennessee Blue Raiders
+    USM => Southern Miss Golden Eagles
+    UTEP => UTEP Miners
+    UTSA => UTSA Roadrunners
+  NCAA_bigw
+    CSUB => CSU Bakersfield Roadrunners
+    CSUN => CSU Northridge Matadors
+    UCSB => UC Santa Barbara Gauchos
+MLB Conferences/Divisions
+  NL_NLW
+    ARI => Arizona Diamondbacks
+    COL => Colorado Rockies
+    LAD => Los Angeles Dodgers
+    SD => San Diego Padres
+    SF => San Francisco Giants
+  NL_NLE
+    ATL => Atlanta Braves
+    MIA => Miami Marlins
+    NYM => New York Mets
+    PHI => Philadelphia Phillies
+    WSH => Washington Nationals
+  AL_ALE
+    BAL => Baltimore Orioles
+    BOS => Boston Red Sox
+    NYY => New York Yankees
+    TB => Tampa Bay Rays
+    TOR => Toronto Blue Jays
+  NL_NLC
+    CHC => Chicago Cubs
+    CIN => Cincinnati Reds
+    MIL => Milwaukee Brewers
+    PIT => Pittsburgh Pirates
+    STL => St. Louis Cardinals
+  AL_ALC
+    CHW => Chicago White Sox
+    CLE => Cleveland Indians
+    DET => Detroit Tigers
+    KC => Kansas City Royals
+    MIN => Minnesota Twins
+  AL_ALW
+    HOU => Houston Astros
+    LAA => Los Angeles Angels
+    OAK => Oakland Athletics
+    SEA => Seattle Mariners
+    TEX => Texas Rangers
+
+Soccer Leagues:
+   LEAGUE_SLUGS = {
+       "eng.1": "Premier League",
+       "esp.1": "La Liga",
+       "ger.1": "Bundesliga",
+       "ita.1": "Serie A",
+       "fra.1": "Ligue 1",
+       "uefa.champions": "Champions League",
+       "uefa.europa": "Europa League",
+       "usa.1": "MLS",
+       "por.1": "Liga Portugal",  # Add this line
+   }
+
+Soccer - Premier League (England)
+  ARS => Arsenal
+  AVL => Aston Villa
+  BHA => Brighton & Hove Albion
+  BOU => AFC Bournemouth
+  BRE => Brentford
+  BUR => Burnley
+  CHE => Chelsea
+  CRY => Crystal Palace
+  EVE => Everton
+  FUL => Fulham
+  LIV => Liverpool
+  LUT => Luton Town
+  MCI => Manchester City
+  MUN => Manchester United
+  NEW => Newcastle United
+  NFO => Nottingham Forest
+  SHU => Sheffield United
+  TOT => Tottenham Hotspur
+  WHU => West Ham United
+  WOL => Wolverhampton Wanderers
+
+Soccer - La Liga (Spain)
+  ALA => Alavés
+  ATH => Athletic Bilbao
+  ATM => Atlético Madrid
+  BAR => Barcelona
+  BET => Real Betis
+  CAG => Cagliari
+  CEL => Celta Vigo
+  ESP => Espanyol
+  GET => Getafe
+  GIR => Girona
+  LAZ => Lazio
+  LEG => Leganés
+  RAY => Rayo Vallecano
+  RMA => Real Madrid
+  SEV => Sevilla
+  VAL => Valencia
+  VLD => Valladolid
+
+Soccer - Bundesliga (Germany)
+  BOC => VfL Bochum
+  BOL => VfL Bochum
+  DOR => Borussia Dortmund
+  FCA => FC Augsburg
+  FCB => Bayern Munich
+  FCU => FC Union Berlin
+  HAC => Hannover 96
+  HDH => Hertha BSC
+  KOL => 1. FC Köln
+  LEV => Bayer Leverkusen
+  M05 => Mainz 05
+  RBL => RB Leipzig
+  SCF => SC Freiburg
+  SGE => Eintracht Frankfurt
+  STU => VfB Stuttgart
+  SVW => Werder Bremen
+  TSG => TSG Hoffenheim
+  WOB => VfL Wolfsburg
+
+Soccer - Serie A (Italy)
+  ATA => Atalanta
+  CAG => Cagliari
+  EMP => Empoli
+  FIO => Fiorentina
+  INT => Inter Milan
+  JUV => Juventus
+  LAZ => Lazio
+  MIL => AC Milan
+  MON => Monza
+  NAP => Napoli
+  ROM => Roma
+  TOR => Torino
+  UDI => Udinese
+  VER => Hellas Verona
+
+Soccer - Ligue 1 (France)
+  LIL => Lille
+  LPM => Lille
+  LYON => Lyon
+  MAR => Marseille
+  MON => Monaco
+  NAN => Nantes
+  NICE => Nice
+  OL => Olympique Lyonnais
+  OM => Olympique de Marseille
+  PAR => Paris Saint-Germain
+  PSG => Paris Saint-Germain
+  REN => Rennes
+  STR => Strasbourg
+
+Soccer - Champions League
+  AJA => Ajax
+  ASM => AS Monaco
+  ASS => AS Saint-Étienne
+  BOC => VfL Bochum
+  CEL => Celtic
+  COM => Club Brugge
+  FCA => FC Augsburg
+  FCB => Bayern Munich
+  FCU => FC Union Berlin
+  FIO => Fiorentina
+  GEN => Genoa
+  HAC => Hannover 96
+  IPS => Ipswich Town
+  KSV => Kaiserslautern
+  LEC => Lecce
+  LIL => Lille
+  LIV => Liverpool
+  M05 => Mainz 05
+  MCI => Manchester City
+  MUN => Manchester United
+  NAN => Nantes
+  OSA => Osasuna
+  RBL => RB Leipzig
+  RCL => RC Lens
+  RMA => Real Madrid
+  SCF => SC Freiburg
+  SGE => Eintracht Frankfurt
+  SR => Sporting CP
+  STP => St. Pauli
+  SVW => Werder Bremen
+  TFC => Toulouse FC
+  TOT => Tottenham Hotspur
+  TSG => TSG Hoffenheim
+  UDI => Udinese
+  VEN => Venezia
+  VFB => VfB Stuttgart
+  VIL => Villarreal
+
+Soccer - Liga Portugal (Portugal)
+  ARO => Arouca
+  BEN => SL Benfica
+  BRA => SC Braga
+  CHA => Chaves
+  EST => Estoril Praia
+  FAM => Famalicão
+  GIL => Gil Vicente
+  MOR => Moreirense
+  POR => FC Porto
+  PTM => Portimonense
+  RIO => Rio Ave
+  SR => Sporting CP
+  VGU => Vitória de Guimarães
+  VSC => Vitória de Setúbal
+
+
+
+Soccer - Other Teams
+  austin => Austin FC
+  cf_montral => CF Montréal
+  charlotte => Charlotte FC
+  dortmund => Borussia Dortmund
+  gladbach => Borussia Mönchengladbach
+  lafc => Los Angeles FC
+  leverkusen => Bayer Leverkusen
+  nycfc => New York City FC
+  paris_sg => Paris Saint-Germain
+  st_louis => St. Louis City SC
+
+MLS Conferences/Divisions
+  Conferences currently unsupported
+
+NHL Conferences/Divisions
+  West_PAC
+    ANA => Anaheim Ducks
+    CGY => Calgary Flames
+    EDM => Edmonton Oilers
+    LA => Los Angeles Kings
+    SEA => Seattle Kraken
+    SJ => San Jose Sharks
+    VAN => Vancouver Canucks
+    VGS => Vegas Golden Knights
+  West_CEN
+    ARI => Arizona Coyotes
+    CHI => Chicago Blackhawks
+    COL => Colorado Avalanche
+    DAL => Dallas Stars
+    MIN => Minnesota Wild
+    NSH => Nashville Predators
+    STL => St. Louis Blues
+    WPG => Winnipeg Jets
+  East_ATL
+    BOS => Boston Bruins
+    BUF => Buffalo Sabres
+    DET => Detroit Red Wings
+    FLA => Florida Panthers
+    MTL => Montreal Canadiens
+    OTT => Ottawa Senators
+    TB => Tampa Bay Lightning
+    TOR => Toronto Maple Leafs
+  East_MET
+    CAR => Carolina Hurricanes
+    CBJ => Columbus Blue Jackets
+    NJ => New Jersey Devils
+    NYI => New York Islanders
+    NYR => New York Rangers
+    PHI => Philadelphia Flyers
+    PIT => Pittsburgh Penguins
+    WSH => Washington Capitals
