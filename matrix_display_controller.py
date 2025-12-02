@@ -1007,13 +1007,13 @@ class DisplayController:
             
             center_y = self.matrix.image.height // 2  # 16 for 32px height
             
-            # Display small logos on the sides (16x16 to avoid overlap)
-            logo_size = 16  # Smaller logos that won't overlap with text
+            # Display larger logos on the sides (24x24 for better visibility)
+            logo_size = 24  # Increased from 20 for better visibility
             if away_logo:
                 try:
                     away_logo_resized = away_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
                     away_y = center_y - (logo_size // 2)  # Center vertically
-                    away_x = 2  # Small margin from left edge
+                    away_x = 0  # At left edge
                     if away_logo_resized.mode == 'RGBA':
                         self.matrix.image.paste(away_logo_resized, (away_x, away_y), away_logo_resized)
                     else:
@@ -1025,7 +1025,7 @@ class DisplayController:
                 try:
                     home_logo_resized = home_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
                     home_y = center_y - (logo_size // 2)  # Center vertically
-                    home_x = self.matrix.image.width - logo_size - 2  # Small margin from right edge
+                    home_x = self.matrix.image.width - logo_size  # At right edge
                     if home_logo_resized.mode == 'RGBA':
                         self.matrix.image.paste(home_logo_resized, (home_x, home_y), home_logo_resized)
                     else:
@@ -1038,11 +1038,37 @@ class DisplayController:
             teams_text = f"{away} @ {home}"
             score_text = f"{away_score}-{home_score}"
             
-            # Draw team names at top of center area (centered in available space)
-            self.matrix.draw_text(teams_text, y=center_y - 8, color=(255, 255, 255), small=True, center=True)
+            # Draw team names at top to avoid logo overlap, with distinct cyan color and outline
+            # Position slightly down (y=2) to prevent cutoff at top of screen
+            if self.matrix.draw:
+                teams_font = self.matrix.small_font
+                bbox = self.matrix.draw.textbbox((0, 0), teams_text, font=teams_font)
+                text_width = bbox[2] - bbox[0]
+                teams_x = (self.matrix.image.width - text_width) // 2
+                teams_y = 2
+                # Draw outline (black) at 8 positions around the text
+                outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                for offset_x, offset_y in outline_offsets:
+                    self.matrix.draw.text((teams_x + offset_x, teams_y + offset_y), teams_text, 
+                                         font=teams_font, fill=(0, 0, 0))
+                # Draw main text in cyan on top
+                self.matrix.draw.text((teams_x, teams_y), teams_text, font=teams_font, fill=(0, 255, 255))
             
-            # Draw score below team names
-            self.matrix.draw_text(score_text, y=center_y + 2, color=(255, 255, 0), center=True)
+            # Draw score in center with outline to prevent overlap with logos
+            # First draw black outline by drawing at multiple offsets
+            score_font = self.matrix.font  # Use regular font for scores
+            if self.matrix.draw:
+                bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
+                text_width = bbox[2] - bbox[0]
+                score_x = (self.matrix.image.width - text_width) // 2
+                score_y = center_y - 2
+                # Draw outline (black) at 8 positions around the text
+                outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                for offset_x, offset_y in outline_offsets:
+                    self.matrix.draw.text((score_x + offset_x, score_y + offset_y), score_text, 
+                                         font=score_font, fill=(0, 0, 0))
+                # Draw main text in yellow on top
+                self.matrix.draw.text((score_x, score_y), score_text, font=score_font, fill=(255, 255, 0))
             
             # Top middle: Period/time/FINAL/Scheduled
             status_text = ""
@@ -1120,19 +1146,49 @@ class DisplayController:
                 max_chars = 12 if ('/' in status_text and ('AM' in status_text or 'PM' in status_text)) else 8
                 if len(status_text) > max_chars:
                     status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
+                # Position status text at bottom, below scores and logos
+                status_y = self.matrix.image.height - 4  # Near bottom of 32px display
                 try:
                     tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
                     if os.path.exists(tiny_font_path):
                         tiny_font = ImageFont.truetype(tiny_font_path, 5)
                         bbox = self.matrix.draw.textbbox((0, 0), status_text, font=tiny_font)
                         text_width = bbox[2] - bbox[0]
-                        x = (self.matrix.image.width - text_width) // 2
-                        self.matrix.draw.text((x, 1), status_text, font=tiny_font, fill=(200, 200, 200))
+                        status_x = (self.matrix.image.width - text_width) // 2
+                        # Draw outline (black) at 8 positions around the text
+                        outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                        for offset_x, offset_y in outline_offsets:
+                            self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text, 
+                                                 font=tiny_font, fill=(0, 0, 0))
+                        # Draw main text in gray on top
+                        self.matrix.draw.text((status_x, status_y), status_text, font=tiny_font, fill=(200, 200, 200))
                     else:
-                        self.matrix.draw_text(status_text[:8], y=1, color=(200, 200, 200), small=True, center=True)
+                        # Use small font with outline
+                        status_font = self.matrix.small_font
+                        bbox = self.matrix.draw.textbbox((0, 0), status_text[:8], font=status_font)
+                        text_width = bbox[2] - bbox[0]
+                        status_x = (self.matrix.image.width - text_width) // 2
+                        # Draw outline (black) at 8 positions around the text
+                        outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                        for offset_x, offset_y in outline_offsets:
+                            self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:8], 
+                                                 font=status_font, fill=(0, 0, 0))
+                        # Draw main text in gray on top
+                        self.matrix.draw.text((status_x, status_y), status_text[:8], font=status_font, fill=(200, 200, 200))
                 except Exception as e:
                     logger.debug(f"Error using tiny font: {e}")
-                    self.matrix.draw_text(status_text[:8], y=1, color=(200, 200, 200), small=True, center=True)
+                    # Fallback with outline
+                    status_font = self.matrix.small_font
+                    bbox = self.matrix.draw.textbbox((0, 0), status_text[:8], font=status_font)
+                    text_width = bbox[2] - bbox[0]
+                    status_x = (self.matrix.image.width - text_width) // 2
+                    # Draw outline (black) at 8 positions around the text
+                    outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                    for offset_x, offset_y in outline_offsets:
+                        self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:8], 
+                                             font=status_font, fill=(0, 0, 0))
+                    # Draw main text in gray on top
+                    self.matrix.draw.text((status_x, status_y), status_text[:8], font=status_font, fill=(200, 200, 200))
             
             # Bottom: Down & Distance (for live games)
             down_distance = game.get('down_distance_text', '')
@@ -1220,11 +1276,12 @@ class DisplayController:
             change = data.get('change', 0)
             change_pct = data.get('change_percent', 0)
             
-            # If icon available, show it on left side
+            # If icon available, show it on left side (larger for better visibility)
             if icon:
                 try:
-                    icon = icon.resize((16, 16), Image.Resampling.LANCZOS)
-                    self.matrix.image.paste(icon, (0, 8))
+                    icon = icon.resize((20, 20), Image.Resampling.LANCZOS)
+                    icon_y = (self.matrix.image.height - 20) // 2  # Center vertically
+                    self.matrix.image.paste(icon, (0, icon_y))
                 except:
                     pass
             
@@ -1232,8 +1289,8 @@ class DisplayController:
             self.matrix.draw_text(ticker[:6], y=2, color=(0, 255, 0), small=True, center=True)
             # Line 2: Price - offset to right to avoid icon overlap
             price_str = f"${price:.2f}" if price < 1000 else f"${price:.0f}"
-            # Offset x position if icon is present (icon is 16px wide + 2px spacing)
-            x_offset = 20 if icon else None
+            # Offset x position if icon is present (icon is 20px wide)
+            x_offset = 22 if icon else None
             self.matrix.draw_text(price_str, x=x_offset, y=14, color=(255, 255, 255), small=True, center=(icon is None))
             # Line 3: Change percentage - center aligned
             if change >= 0:
@@ -1295,11 +1352,12 @@ class DisplayController:
             # Display location and temperature
             temp = data.get('temp', 0)
             
-            # If icon available, show it on left side
+            # If icon available, show it on left side (larger for better visibility)
             if icon:
                 try:
-                    icon = icon.resize((16, 16), Image.Resampling.LANCZOS)
-                    self.matrix.image.paste(icon, (0, 8))
+                    icon = icon.resize((20, 20), Image.Resampling.LANCZOS)
+                    icon_y = (self.matrix.image.height - 20) // 2  # Center vertically
+                    self.matrix.image.paste(icon, (0, icon_y))
                 except:
                     pass
             
