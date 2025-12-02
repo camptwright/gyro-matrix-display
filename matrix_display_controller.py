@@ -55,9 +55,17 @@ try:
     from src.cache_manager import CacheManager
     MANAGERS_AVAILABLE = True
     logger.info("LEDMatrix managers loaded successfully")
-except ImportError:
-    logger.info("LEDMatrix managers not available - using basic fallback displays")
+except (ImportError, SyntaxError, IndentationError) as e:
+    logger.info(f"LEDMatrix managers not available - using basic fallback displays: {e}")
     MANAGERS_AVAILABLE = False
+
+# Try to import music manager components
+SkipModuleException = None
+try:
+    from src.music_manager import SkipModuleException
+except (ImportError, SyntaxError, IndentationError):
+    # SkipModuleException not available - will handle gracefully
+    pass
 
 
 class MatrixDisplay:
@@ -230,7 +238,20 @@ class DisplayController:
     """Main display controller managing all modes"""
     
     def __init__(self, config_path: str = "config.json"):
+        # Make config path absolute if relative (relative to script directory)
+        if not os.path.isabs(config_path):
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(script_dir, config_path)
+        # Store the absolute config path for reloading
+        self.config_path = config_path
+        logger.info(f"Loading config from: {config_path}")
         self.config = self._load_config(config_path)
+        logger.info(f"Loaded config: sports={len(self.config.get('sports', []))}, stocks={len(self.config.get('stocks', []))}, crypto={len(self.config.get('crypto', []))}, weather={len(self.config.get('weather_locations', []))}")
+        # Log actual config contents for debugging
+        logger.debug(f"Config sports list: {self.config.get('sports', [])}")
+        logger.debug(f"Config stocks list: {self.config.get('stocks', [])}")
+        logger.debug(f"Config crypto list: {self.config.get('crypto', [])}")
+        logger.debug(f"Config weather list: {self.config.get('weather_locations', [])}")
         self.matrix = MatrixDisplay(self.config)
         
         # Initialize asset loader
@@ -244,7 +265,7 @@ class DisplayController:
         # Mode state
         self.current_mode = "clock"
         self.mode_index = 0
-        self.modes = ["clock", "sports", "stocks", "weather", "brightness"]
+        self.modes = ["clock", "sports", "stocks", "weather", "music", "brightness"]
         
         # Clock state - handle timezone errors gracefully
         try:
@@ -284,6 +305,86 @@ class DisplayController:
         # Initialize managers if available
         self.config_manager = None
         self.cache_manager = None
+        self.music_manager = None
+        
+        # Try to initialize music manager (works independently of other managers)
+        try:
+            from src.music_manager import MusicManager, SkipModuleException
+            # Create a display manager wrapper for compatibility
+            class DisplayManagerWrapper:
+                def __init__(self, matrix):
+                    self.matrix = matrix
+                def clear(self):
+                    self.matrix.clear()
+                def draw_text(self, text, x=None, y=None, color=(255, 255, 255), font=None, **kwargs):
+                    # Convert font parameter to small flag for MatrixDisplay
+                    if font is None:
+                        small = False
+                    else:
+                        # Check if font matches small or extra_small fonts
+                        small = (font == self.small_font or font == self.extra_small_font or 
+                                (hasattr(self.matrix, 'small_font') and font == self.matrix.small_font))
+                    # Extract center from kwargs if present, default True
+                    center = kwargs.get('center', True)
+                    self.matrix.draw_text(text, x=x, y=y, color=color, small=small, center=center)
+                def update_display(self):
+                    self.matrix.update()
+                def get_text_width(self, text, font):
+                    """Calculate text width using the font"""
+                    if not self.matrix.draw:
+                        return len(text) * 6  # Rough estimate
+                    # Use the appropriate font
+                    if font == self.regular_font:
+                        use_font = self.matrix.font
+                    elif font == self.small_font:
+                        use_font = self.matrix.small_font
+                    elif font == self.extra_small_font:
+                        use_font = self.matrix.small_font  # Use small_font as fallback
+                    else:
+                        use_font = font if font else self.matrix.font
+                    bbox = self.matrix.draw.textbbox((0, 0), text, font=use_font)
+                    return bbox[2] - bbox[0]
+                @property
+                def width(self):
+                    return self.matrix.width
+                @property
+                def height(self):
+                    return self.matrix.height
+                @property
+                def regular_font(self):
+                    return self.matrix.font
+                @property
+                def small_font(self):
+                    return self.matrix.small_font
+                @property
+                def extra_small_font(self):
+                    return self.matrix.small_font  # Use small_font as extra_small
+                @property
+                def bdf_5x7_font(self):
+                    # Map BDF font to small_font (PIL font) for compatibility
+                    return self.matrix.small_font
+                @property
+                def image(self):
+                    return self.matrix.image
+                @property
+                def draw(self):
+                    return self.matrix.draw
+            
+            display_wrapper = DisplayManagerWrapper(self.matrix)
+            # Check if music is enabled in config
+            music_config = self.config.get('music', {})
+            if music_config.get('enabled', False):
+                self.music_manager = MusicManager(display_wrapper, self.config)
+                # Start polling for track updates
+                self.music_manager.start_polling()
+                logger.info("Music manager initialized and polling started")
+            else:
+                logger.info("Music manager disabled in config")
+        except (ImportError, SyntaxError, IndentationError) as e:
+            logger.info(f"Music manager not available: {e}")
+        except Exception as e:
+            logger.error(f"Failed to initialize music manager: {e}", exc_info=True)
+        
         if MANAGERS_AVAILABLE:
             try:
                 self.config_manager = ConfigManager()
@@ -296,16 +397,59 @@ class DisplayController:
                         self.matrix = matrix
                     def clear(self):
                         self.matrix.clear()
-                    def draw_text(self, *args, **kwargs):
-                        self.matrix.draw_text(*args, **kwargs)
+                    def draw_text(self, text, x=None, y=None, color=(255, 255, 255), font=None, **kwargs):
+                        # Convert font parameter to small flag for MatrixDisplay
+                        if font is None:
+                            small = False
+                        else:
+                            # Check if font matches small or extra_small fonts
+                            small = (font == self.small_font or font == self.extra_small_font or 
+                                    (hasattr(self.matrix, 'small_font') and font == self.matrix.small_font))
+                        # Extract center from kwargs if present, default True
+                        center = kwargs.get('center', True)
+                        self.matrix.draw_text(text, x=x, y=y, color=color, small=small, center=center)
                     def update_display(self):
                         self.matrix.update()
+                    def get_text_width(self, text, font):
+                        """Calculate text width using the font"""
+                        if not self.matrix.draw:
+                            return len(text) * 6  # Rough estimate
+                        # Use the appropriate font
+                        if font == self.regular_font:
+                            use_font = self.matrix.font
+                        elif font == self.small_font:
+                            use_font = self.matrix.small_font
+                        elif font == self.extra_small_font:
+                            use_font = self.matrix.small_font  # Use small_font as fallback
+                        else:
+                            use_font = font if font else self.matrix.font
+                        bbox = self.matrix.draw.textbbox((0, 0), text, font=use_font)
+                        return bbox[2] - bbox[0]
                     @property
                     def width(self):
                         return self.matrix.width
                     @property
                     def height(self):
                         return self.matrix.height
+                    @property
+                    def regular_font(self):
+                        return self.matrix.font
+                    @property
+                    def small_font(self):
+                        return self.matrix.small_font
+                    @property
+                    def extra_small_font(self):
+                        return self.matrix.small_font  # Use small_font as extra_small
+                    @property
+                    def bdf_5x7_font(self):
+                        # Map BDF font to small_font (PIL font) for compatibility
+                        return self.matrix.small_font
+                    @property
+                    def image(self):
+                        return self.matrix.image
+                    @property
+                    def draw(self):
+                        return self.matrix.draw
                 
                 display_wrapper = DisplayManagerWrapper(self.matrix)
                 
@@ -337,7 +481,12 @@ class DisplayController:
             "sports": [],
             "stocks": [],
             "crypto": [],
-            "weather_locations": []
+            "weather_locations": [],
+            "music": {
+                "enabled": False,
+                "preferred_source": "spotify",
+                "POLLING_INTERVAL_SECONDS": 2
+            }
         }
         
         if os.path.exists(config_path):
@@ -369,7 +518,13 @@ class DisplayController:
     def reload_config(self):
         """Reload configuration from file"""
         try:
-            self.config = self._load_config("config.json")
+            # Use the stored config path
+            config_path = getattr(self, 'config_path', "config.json")
+            if not os.path.isabs(config_path):
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                config_path = os.path.join(script_dir, config_path)
+            logger.info(f"Reloading config from: {config_path}")
+            self.config = self._load_config(config_path)
             # Update state from new config
             self.clock_locations = self.config.get('clock_locations', [])
             self.sports_list = self.config.get('sports', [])
@@ -381,7 +536,98 @@ class DisplayController:
             new_brightness = self.config.get('brightness', 50)
             if new_brightness != self.matrix.brightness:
                 self.matrix.set_brightness(new_brightness)
-            logger.info("Configuration reloaded")
+            
+            # Reload music manager if config changed
+            music_config = self.config.get('music', {})
+            music_enabled = music_config.get('enabled', False)
+            
+            if music_enabled and not self.music_manager:
+                # Music was just enabled, try to initialize it
+                try:
+                    from src.music_manager import MusicManager, SkipModuleException
+                    class DisplayManagerWrapper:
+                        def __init__(self, matrix):
+                            self.matrix = matrix
+                        def clear(self):
+                            self.matrix.clear()
+                        def draw_text(self, text, x=None, y=None, color=(255, 255, 255), font=None, **kwargs):
+                            # Convert font parameter to small flag for MatrixDisplay
+                            if font is None:
+                                small = False
+                            else:
+                                # Check if font matches small or extra_small fonts
+                                small = (font == self.small_font or font == self.extra_small_font or 
+                                        (hasattr(self.matrix, 'small_font') and font == self.matrix.small_font))
+                            # Extract center from kwargs if present, default True
+                            center = kwargs.get('center', True)
+                            self.matrix.draw_text(text, x=x, y=y, color=color, small=small, center=center)
+                        def update_display(self):
+                            self.matrix.update()
+                        def get_text_width(self, text, font):
+                            """Calculate text width using the font"""
+                            if not self.matrix.draw:
+                                return len(text) * 6  # Rough estimate
+                            # Use the appropriate font
+                            if font == self.regular_font:
+                                use_font = self.matrix.font
+                            elif font == self.small_font:
+                                use_font = self.matrix.small_font
+                            elif font == self.extra_small_font:
+                                use_font = self.matrix.small_font  # Use small_font as fallback
+                            else:
+                                use_font = font if font else self.matrix.font
+                            bbox = self.matrix.draw.textbbox((0, 0), text, font=use_font)
+                            return bbox[2] - bbox[0]
+                        @property
+                        def width(self):
+                            return self.matrix.width
+                        @property
+                        def height(self):
+                            return self.matrix.height
+                        @property
+                        def regular_font(self):
+                            return self.matrix.font
+                        @property
+                        def small_font(self):
+                            return self.matrix.small_font
+                        @property
+                        def extra_small_font(self):
+                            return self.matrix.small_font  # Use small_font as extra_small
+                        @property
+                        def bdf_5x7_font(self):
+                            # Map BDF font to small_font (PIL font) for compatibility
+                            return self.matrix.small_font
+                        @property
+                        def image(self):
+                            return self.matrix.image
+                        @property
+                        def draw(self):
+                            return self.matrix.draw
+                    
+                    display_wrapper = DisplayManagerWrapper(self.matrix)
+                    self.music_manager = MusicManager(display_wrapper, self.config)
+                    # Start polling for track updates
+                    self.music_manager.start_polling()
+                    logger.info("Music manager initialized after config reload and polling started")
+                except Exception as e:
+                    logger.error(f"Failed to initialize music manager after reload: {e}")
+            elif not music_enabled and self.music_manager:
+                # Music was disabled, stop polling
+                try:
+                    self.music_manager.stop_polling()
+                except:
+                    pass
+                self.music_manager = None
+                logger.info("Music manager stopped after config reload")
+            elif self.music_manager:
+                # Music manager exists, update its config
+                try:
+                    self.music_manager.config = self.config
+                    self.music_manager._load_config()
+                except Exception as e:
+                    logger.error(f"Error updating music manager config: {e}")
+            
+            logger.info(f"Configuration reloaded: sports={len(self.sports_list)}, stocks={len(self.stocks_list)}, crypto={len(self.crypto_list)}, weather={len(self.weather_locations)}, music_enabled={music_enabled}")
         except Exception as e:
             logger.error(f"Error reloading config: {e}")
             
@@ -468,6 +714,8 @@ class DisplayController:
                 self.current_game = (self.current_game + 1) % len(games)  # Loop back to 0
                 logger.info(f"Game: {old_game} -> {self.current_game} (total games: {len(games)})")
                 # Force immediate display update by calling display_sports directly
+                # Clear first to prevent overlap
+                self.matrix.clear()
                 try:
                     self.display_sports()
                 except Exception as e:
@@ -523,6 +771,8 @@ class DisplayController:
                 self.current_game = (self.current_game - 1) % len(games)  # Loop back to last game
                 logger.info(f"Game: {old_game} -> {self.current_game} (total games: {len(games)})")
                 # Force immediate display update by calling display_sports directly
+                # Clear first to prevent overlap
+                self.matrix.clear()
                 try:
                     self.display_sports()
                 except Exception as e:
@@ -649,9 +899,16 @@ class DisplayController:
             
     def display_sports(self):
         """Display sports mode with actual scores"""
+        # Clear the image buffer completely before drawing
         self.matrix.clear()
+        # Ensure the clear is applied immediately by recreating the image
+        if self.matrix.image:
+            self.matrix.image = Image.new('RGB', (self.matrix.image.width, self.matrix.image.height))
+            self.matrix.draw = ImageDraw.Draw(self.matrix.image)
         
+        logger.debug(f"display_sports: sports_list={self.sports_list}, current_sport={self.current_sport}, len={len(self.sports_list) if self.sports_list else 0}")
         if not self.sports_list or self.current_sport >= len(self.sports_list):
+            logger.warning(f"No sports configured or invalid index: sports_list={self.sports_list}, current_sport={self.current_sport}")
             self.matrix.draw_text("NO SPORTS", y=10, color=(255, 0, 0))
             self.matrix.update()
             return
@@ -918,7 +1175,9 @@ class DisplayController:
         """Display stocks/crypto mode with actual prices"""
         self.matrix.clear()
         
+        logger.debug(f"display_stocks: all_tickers={self.all_tickers}, current_ticker={self.current_ticker}, len={len(self.all_tickers) if self.all_tickers else 0}")
         if not self.all_tickers or self.current_ticker >= len(self.all_tickers):
+            logger.warning(f"No tickers configured or invalid index: all_tickers={self.all_tickers}, current_ticker={self.current_ticker}")
             self.matrix.draw_text("NO TICKERS", y=10, color=(255, 0, 0))
             self.matrix.update()
             return
@@ -994,7 +1253,9 @@ class DisplayController:
         """Display weather mode with actual weather data"""
         self.matrix.clear()
         
+        logger.debug(f"display_weather: weather_locations={self.weather_locations}, current_weather_location={self.current_weather_location}, len={len(self.weather_locations) if self.weather_locations else 0}")
         if not self.weather_locations or self.current_weather_location >= len(self.weather_locations):
+            logger.warning(f"No weather locations configured or invalid index: weather_locations={self.weather_locations}, current_weather_location={self.current_weather_location}")
             self.matrix.draw_text("NO WEATHER", y=10, color=(255, 0, 0))
             self.matrix.update()
             return
@@ -1083,6 +1344,38 @@ class DisplayController:
             
         self.matrix.update()
             
+    def display_music(self):
+        """Display music mode with Spotify/YouTube Music"""
+        if self.music_manager:
+            try:
+                # Activate music display if not already active
+                if not self.music_manager.is_music_display_active:
+                    self.music_manager.activate_music_display()
+                # Use the music manager's display method
+                self.music_manager.display()
+            except Exception as skip_exc:
+                # Check if this is a SkipModuleException (nothing playing)
+                if SkipModuleException and isinstance(skip_exc, SkipModuleException):
+                    # Nothing is playing - show message (don't auto-cycle, let user manually cycle if desired)
+                    self.matrix.clear()
+                    self.matrix.draw_text("MUSIC", y=5, color=(255, 255, 0), small=True, center=True)
+                    self.matrix.draw_text("NOTHING", y=20, color=(200, 200, 200), small=True, center=True)
+                    self.matrix.update()
+                else:
+                    # Other error - log and show error message
+                    logger.error(f"Error displaying music: {skip_exc}", exc_info=True)
+                    # Fallback display
+                    self.matrix.clear()
+                    self.matrix.draw_text("MUSIC", y=5, color=(255, 255, 0), small=True, center=True)
+                    self.matrix.draw_text("ERROR", y=20, color=(255, 0, 0), small=True, center=True)
+                    self.matrix.update()
+        else:
+            # No music manager available
+            self.matrix.clear()
+            self.matrix.draw_text("MUSIC", y=5, color=(255, 255, 0), small=True, center=True)
+            self.matrix.draw_text("NOT CONFIG", y=20, color=(200, 200, 200), small=True, center=True)
+            self.matrix.update()
+        
     def display_brightness(self):
         """Display brightness setting"""
         self.matrix.clear()
@@ -1120,6 +1413,8 @@ class DisplayController:
                 self.display_stocks()
             elif self.current_mode == "weather":
                 self.display_weather()
+            elif self.current_mode == "music":
+                self.display_music()
             elif self.current_mode == "brightness":
                 self.display_brightness()
         except Exception as e:
@@ -1154,4 +1449,3 @@ class DisplayController:
 if __name__ == "__main__":
     controller = DisplayController()
     controller.run()
-

@@ -37,10 +37,12 @@ def fetch_espn_scores(sport: str, league_id: str = None) -> List[Dict[str, Any]]
             'nhl': 'hockey/nhl',
             'ncaaf': 'football/college-football',
             'ncaab': 'basketball/mens-college-basketball',
+            'ncaam': 'basketball/mens-college-basketball',  # NCAAM is same as NCAAB
             'NFL': 'football/nfl',  # Handle uppercase
             'NBA': 'basketball/nba',
             'MLB': 'baseball/mlb',
-            'NHL': 'hockey/nhl'
+            'NHL': 'hockey/nhl',
+            'NCAAM': 'basketball/mens-college-basketball'
         }
         
         # Convert to string and lowercase for lookup
@@ -157,4 +159,3 @@ def fetch_simple_scores(sport: str) -> List[Dict[str, Any]]:
         }
     ]
     return mock_games
-

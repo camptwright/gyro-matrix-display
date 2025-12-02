@@ -1,15 +1,26 @@
-# Core dependencies
+# Core dependencies from example display system
+Pillow>=10.4.0,<12.0.0
+pytz==2023.3
+requests>=2.32.0
+# timezonefinder==6.2.0  # Optional - not used in core display, requires numpy compilation
+geopy==2.4.1
+google-auth-oauthlib==1.0.0
+google-auth-httplib2==0.1.0
+google-api-python-client==2.86.0
+freetype-py==2.5.1
+spotipy
+Flask
+unidecode
+icalevents
+python-socketio
+python-engineio
+websockets
+websocket-client
+
+# BLE support for gyro controller
 bleak>=0.21.0
-Pillow>=10.0.0
-Flask>=3.0.0
-pytz>=2023.3
-requests>=2.31.0
 
 # RGB Matrix library (install separately on Pi)
 # rpi-rgb-led-matrix
 # See installation instructions in README
-
-# Optional: For advanced features from LEDMatrix example
-# numpy>=1.24.0
-# freetype-py>=2.3.0
 

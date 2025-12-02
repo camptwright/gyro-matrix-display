@@ -11,7 +11,26 @@ import time
 from pathlib import Path
 
 app = Flask(__name__)
-CONFIG_FILE = "config.json"
+# Make config path absolute - try to use same directory as matrix_display_controller.py
+# First try to find matrix_display_controller.py and use its directory
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+# Check if we're in the matrix-display directory
+if os.path.basename(_script_dir) == 'matrix-display' or os.path.exists(os.path.join(_script_dir, 'matrix_display_controller.py')):
+    CONFIG_FILE = os.path.join(_script_dir, "config.json")
+else:
+    # Fallback: try common locations
+    possible_paths = [
+        "/home/raspberrypi/matrix-display/config.json",
+        os.path.join(_script_dir, "config.json"),
+        "config.json"
+    ]
+    CONFIG_FILE = possible_paths[0]  # Default to Pi path
+    for path in possible_paths:
+        if os.path.exists(path) or os.path.exists(os.path.dirname(path)):
+            CONFIG_FILE = path
+            break
+
+print(f"Web config service using config file: {CONFIG_FILE}")
 
 
 def load_config():
@@ -23,7 +42,12 @@ def load_config():
         "sports": [],
         "stocks": [],
         "crypto": [],
-        "weather_locations": []
+        "weather_locations": [],
+        "music": {
+            "enabled": False,
+            "preferred_source": "spotify",
+            "POLLING_INTERVAL_SECONDS": 2
+        }
     }
     
     if os.path.exists(CONFIG_FILE):
@@ -40,6 +64,9 @@ def load_config():
             return default_config
     else:
         # Create default config file
+        config_dir = os.path.dirname(CONFIG_FILE)
+        if config_dir:  # Only create dir if there's a directory component
+            os.makedirs(config_dir, exist_ok=True)
         with open(CONFIG_FILE, 'w') as f:
             json.dump(default_config, f, indent=2)
         return default_config
@@ -48,11 +75,18 @@ def load_config():
 def save_config(config):
     """Save configuration to JSON file"""
     try:
+        config_dir = os.path.dirname(CONFIG_FILE)
+        if config_dir:  # Only create dir if there's a directory component
+            os.makedirs(config_dir, exist_ok=True)
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
+        print(f"Config saved to: {CONFIG_FILE}")
+        print(f"Config contents: sports={len(config.get('sports', []))}, stocks={len(config.get('stocks', []))}, crypto={len(config.get('crypto', []))}, weather={len(config.get('weather_locations', []))}")
         return True
     except Exception as e:
         print(f"Error saving config: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -287,6 +321,31 @@ HTML_TEMPLATE = """
             <div class="item-list" id="weatherList"></div>
         </div>
         
+        <!-- Music Configuration -->
+        <div class="section">
+            <h2>Music (Spotify/YouTube Music)</h2>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="musicEnabled" onchange="updateMusicEnabled()">
+                    Enable Music Mode
+                </label>
+            </div>
+            <div class="form-group">
+                <label>Preferred Source:</label>
+                <select id="musicSource">
+                    <option value="spotify">Spotify</option>
+                    <option value="ytm">YouTube Music</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Polling Interval (seconds):</label>
+                <input type="number" id="musicPollingInterval" min="1" max="10" value="2">
+            </div>
+            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
+                Note: Spotify credentials must be configured in <code>config/config_secrets.json</code>
+            </p>
+        </div>
+        
         <div style="text-align: center; margin-top: 30px;">
             <button onclick="saveConfig()" style="background: #2ecc71; font-size: 16px; padding: 15px 30px;">
                 💾 Save Configuration
@@ -310,6 +369,20 @@ HTML_TEMPLATE = """
         function updateBrightness(value) {
             document.getElementById('brightnessValue').textContent = value + '%';
             config.brightness = parseInt(value);
+        }
+        
+        function updateMusicEnabled() {
+            if (!config.music) {
+                config.music = {};
+            }
+            try {
+                const musicEnabledEl = document.getElementById('musicEnabled');
+                if (musicEnabledEl) {
+                    config.music.enabled = musicEnabledEl.checked;
+                }
+            } catch (e) {
+                console.error('Error updating music enabled:', e);
+            }
         }
         
         function renderLists() {
@@ -377,6 +450,27 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
             `).join('');
+            
+            // Music configuration
+            if (!config.music) {
+                config.music = { enabled: false, preferred_source: "spotify", POLLING_INTERVAL_SECONDS: 2 };
+            }
+            try {
+                const musicEnabledEl = document.getElementById('musicEnabled');
+                const musicSourceEl = document.getElementById('musicSource');
+                const musicPollingEl = document.getElementById('musicPollingInterval');
+                if (musicEnabledEl) {
+                    musicEnabledEl.checked = config.music.enabled || false;
+                }
+                if (musicSourceEl) {
+                    musicSourceEl.value = config.music.preferred_source || "spotify";
+                }
+                if (musicPollingEl) {
+                    musicPollingEl.value = config.music.POLLING_INTERVAL_SECONDS || 2;
+                }
+            } catch (e) {
+                console.error('Error initializing music config:', e);
+            }
         }
         
         function addClockLocation() {
@@ -457,6 +551,27 @@ HTML_TEMPLATE = """
         
         async function saveConfig() {
             try {
+                // Update music config from form
+                if (!config.music) {
+                    config.music = {};
+                }
+                try {
+                    const musicEnabledEl = document.getElementById('musicEnabled');
+                    const musicSourceEl = document.getElementById('musicSource');
+                    const musicPollingEl = document.getElementById('musicPollingInterval');
+                    if (musicEnabledEl) {
+                        config.music.enabled = musicEnabledEl.checked;
+                    }
+                    if (musicSourceEl) {
+                        config.music.preferred_source = musicSourceEl.value;
+                    }
+                    if (musicPollingEl) {
+                        config.music.POLLING_INTERVAL_SECONDS = parseInt(musicPollingEl.value) || 2;
+                    }
+                } catch (e) {
+                    console.error('Error reading music config from form:', e);
+                }
+                
                 const response = await fetch('/api/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -514,7 +629,7 @@ def save_config_api():
                 os.chmod(reload_file, 0o666)
             except Exception as reload_err:
                 # Reload failed, but config was saved
-                logger.warning(f"Could not trigger config reload: {reload_err}")
+                print(f"Could not trigger config reload: {reload_err}")
             
             return jsonify({"success": True})
         else:

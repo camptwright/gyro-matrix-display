@@ -25,7 +25,7 @@ NUS_TX = UUID("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
 DEVICE_HINTS = ["imu controller", "imu raw (ble uart)", "imu controller (ble uart)"]
 
 # Mode management
-MODES = ["clock", "sports", "stocks", "weather", "brightness"]
+MODES = ["clock", "sports", "stocks", "weather", "music", "brightness"]
 
 # Global display controller
 display_controller: DisplayController = None
@@ -170,6 +170,9 @@ async def main():
                     elif current_mode == "weather":
                         if axis == "yaw":
                             handle_weather_gesture(direction)
+                    elif current_mode == "music":
+                        # Music mode doesn't have gesture controls (yet)
+                        pass
                     elif current_mode == "brightness":
                         if axis == "yaw":
                             handle_brightness_gesture(direction)

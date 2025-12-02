@@ -1,196 +1,154 @@
-# Matrix Display Controller with Gyroscopic Control
+# RGB Matrix Display Controller
 
-A comprehensive sports, stocks, weather, and clock matrix display system controlled via a gyroscopic ESP32-S3 Feather controller. Optimized for Raspberry Pi 3B with Adafruit RGB Matrix Bonnet and 32x64 RGB LED Matrix (6mm pitch).
+A Raspberry Pi-based RGB LED matrix display system that shows sports scores, weather, stocks, music, and more. Controlled via a gyroscopic Arduino/ESP32 controller with Bluetooth Low Energy (BLE) communication.
 
 ## Features
 
-- **Multiple Display Modes:**
-  - Clock with multiple time zones
-  - Sports scores and games
-  - Stocks and cryptocurrency prices
-  - Weather information
-  - Brightness control
-
-- **Gyroscopic Control:**
-  - Button cycles through modes: Clock → Sports → Stocks → Weather → Brightness → Clock
-  - Gesture-based navigation for each mode
-  - Bluetooth Low Energy (BLE) communication
-
-- **Web Configuration Interface:**
-  - Configure favorites/areas for each mode
-  - Adjust brightness
-  - Manage time zones, sports, stocks, crypto, and weather locations
+- **Sports Scores**: Real-time scores for NFL, NBA, MLB, NHL, NCAA, and more
+- **Weather**: Current conditions and forecasts
+- **Stocks & Crypto**: Real-time price updates
+- **Music**: Spotify integration showing current track, artist, and album art
+- **Clock**: Time, date, and calendar display
+- **Web Configuration**: Flask-based web interface for easy setup
+- **Gesture Control**: Navigate modes using gyroscopic gestures via BLE controller
 
 ## Hardware Requirements
 
-- Raspberry Pi 3B
-- Adafruit RGB Matrix Bonnet
-- Adafruit 6mm pitch 32x64 RGB LED Matrix display
-- Adafruit ESP32-S3 Feather
-- MPU6050 Gyroscope/Accelerometer
-- Button (connected to D9 on ESP32)
+- Raspberry Pi (tested on Pi 4)
+- RGB LED Matrix (32x32 or compatible)
+- Adafruit RGB Matrix HAT or compatible driver
+- ESP32 or Arduino with gyroscope for gesture control (optional)
 
 ## Installation
 
-**For detailed installation instructions, see [INSTALL.md](INSTALL.md)**
-
-### Quick Start
-
-1. **Transfer files to your Pi:**
+1. **Clone the repository:**
    ```bash
-   scp -r * pi@raspberrypi.local:~/matrix-display/
+   git clone <your-repo-url>
+   cd matrix-display
    ```
 
-2. **SSH into your Pi:**
+2. **Install RGB Matrix library:**
    ```bash
-   ssh pi@raspberrypi.local
-   cd ~/matrix-display
-   ```
-
-3. **Run the setup script:**
-   ```bash
-   chmod +x setup.sh
-   ./setup.sh
-   ```
-
-4. **Install RGB Matrix Library:**
-   ```bash
-   cd ~
    git clone https://github.com/hzeller/rpi-rgb-led-matrix.git
    cd rpi-rgb-led-matrix
-   make -C python
-   sudo make -C python install
-   cd ~/matrix-display
+   make
+   cd python
+   sudo python3 setup.py install
+   cd ../..
    ```
 
-5. **Install Python dependencies:**
+3. **Install Python dependencies:**
    ```bash
-   pip3 install -r requirements.txt
+   pip3 install -r requirements.txt --break-system-packages
    ```
 
-6. **Configure via web interface:**
+4. **Set up configuration:**
    ```bash
-   python3 web_config.py
-   # Then open http://localhost:5000 in a browser
+   cp config/config.template.json config/config.json
+   cp config/config_secrets.template.json config/config_secrets.json
+   # Edit config.json and config_secrets.json with your settings
    ```
 
-7. **Enable auto-start:**
+5. **Authenticate Spotify (if using music mode):**
    ```bash
+   python3 src/authenticate_spotify.py
+   ```
+
+6. **Install systemd services:**
+   ```bash
+   sudo cp matrix-display.service /etc/systemd/system/
+   sudo cp web-config.service /etc/systemd/system/
+   sudo systemctl daemon-reload
    sudo systemctl enable matrix-display.service
    sudo systemctl enable web-config.service
    sudo systemctl start matrix-display.service
    sudo systemctl start web-config.service
    ```
 
-### Upload ESP32 Controller Code
-
-Upload `arduino_controller.py` to your ESP32-S3 Feather using Arduino IDE. Install these libraries:
-- NimBLE-Arduino
-- Adafruit MPU6050
-- Adafruit Unified Sensor
-- Adafruit BusIO
-
 ## Configuration
 
-### Web Configuration Interface (Recommended)
+### Web Interface
 
-Access the web interface at `http://your-pi-ip:5000` or `http://localhost:5000` from the Pi.
-
-Configure:
-- Clock locations (time zones)
-- Sports favorites
-- Stock tickers
-- Cryptocurrency tickers
-- Weather locations
-- Brightness level
+Access the web configuration interface at `http://<PI_IP>:5000` to:
+- Enable/disable display modes
+- Configure sports teams to follow
+- Set up stock/crypto tickers
+- Configure weather location
+- Enable music mode and set polling interval
 
 ### Manual Configuration
 
-Edit `config.json` directly. The system will create a default config on first run.
+Edit `config/config.json` directly for advanced settings:
+- Display modes and rotation
+- API endpoints
+- Display preferences
+- Cache settings
 
 ## Usage
 
+### Display Modes
+
+Navigate between modes using gesture controls:
+- **Clock**: Time and date
+- **Sports**: Rotating sports scores
+- **Weather**: Current conditions
+- **Stocks**: Stock and crypto prices
+- **Music**: Current Spotify track with album art
+
 ### Gesture Controls
 
-**Clock Mode:**
-- LEFT FLICK = Previous time zone
-- RIGHT FLICK = Next time zone
+- **Tilt Left/Right**: Navigate between modes
+- **Tap**: Select/confirm
+- **Shake**: Return to clock
 
-**Sports Mode:**
-- UP FLICK = Next sport
-- DOWN FLICK = Previous sport
-- RIGHT FLICK = Next game (same sport)
-- LEFT FLICK = Previous game (same sport)
-
-**Stocks/Crypto Mode:**
-- LEFT FLICK = Previous ticker
-- RIGHT FLICK = Next ticker
-
-**Weather Mode:**
-- LEFT FLICK = Previous weather location
-- RIGHT FLICK = Next weather location
-
-**Brightness Mode:**
-- LEFT FLICK = Decrease brightness
-- RIGHT FLICK = Increase brightness
-
-### Button Control
-
-Press the button on the ESP32 controller to cycle through modes:
-Clock → Sports → Stocks → Weather → Brightness → Clock
-
-## File Structure
+## Project Structure
 
 ```
-.
-├── arduino_controller.py      # ESP32-S3 Feather controller code
-├── receiver.py                # BLE receiver and gesture handler
-├── matrix_display_controller.py # Main display controller
-├── web_config.py              # Web configuration interface
-├── matrix-display.service      # Systemd service for display
-├── web-config.service         # Systemd service for web interface
-├── requirements.txt           # Python dependencies
-├── config.json                # Configuration file (auto-generated)
-└── README.md                  # This file
+matrix-display/
+├── matrix_display_controller.py  # Main controller
+├── receiver.py                    # BLE receiver for gestures
+├── web_config.py                 # Web configuration interface
+├── sports_fetcher.py             # Sports API integration
+├── stock_fetcher.py              # Stock/crypto API integration
+├── weather_fetcher.py            # Weather API integration
+├── display_assets.py             # Asset loader for logos/icons
+├── arduino_controller.ino        # Arduino firmware (reference)
+├── requirements.txt              # Python dependencies
+├── config/                       # Configuration files
+│   ├── config.template.json
+│   └── config_secrets.template.json
+├── src/                          # Display managers
+│   ├── music_manager.py          # Spotify music display
+│   ├── clock.py                  # Clock display
+│   ├── weather_manager.py        # Weather display
+│   ├── stock_manager.py          # Stock display
+│   └── ...                       # Other managers
+└── assets/                       # Logos, fonts, icons
+    ├── fonts/
+    ├── sports/
+    ├── stocks/
+    └── weather/
 ```
+
+## API Keys Required
+
+- **OpenWeatherMap**: For weather data (free tier available)
+- **Spotify**: For music mode (requires Spotify Premium)
+- **ESPN**: Sports scores (no key required)
+- **Yahoo Finance**: Stock/crypto prices (no key required)
 
 ## Troubleshooting
 
-### Display Not Working
-
-1. Check that the RGB Matrix Bonnet is properly connected
-2. Verify GPIO slowdown setting (should be 2 for Pi 3B)
-3. Check brightness setting (may be too low)
-4. Review logs: `sudo journalctl -u matrix-display.service -f`
-
-### Bluetooth Connection Issues
-
-1. Ensure Bluetooth is powered on: `sudo bluetoothctl power on`
-2. Check if device is discoverable
-3. Review logs: `sudo journalctl -u matrix-display.service -f`
-
-### Web Interface Not Accessible
-
-1. Check if service is running: `sudo systemctl status web-config.service`
-2. Verify port 5000 is not blocked by firewall
-3. Review logs: `sudo journalctl -u web-config.service -f`
-
-## Performance Optimization for Pi 3B
-
-The system is optimized for Raspberry Pi 3B with:
-- Reduced refresh rate (60 Hz)
-- GPIO slowdown of 2
-- Efficient update intervals
-- Lightweight display rendering
+- **Display not working**: Check RGB matrix library installation and GPIO connections
+- **BLE not connecting**: Verify ESP32 MAC address in `receiver.py`
+- **Music not showing**: Ensure Spotify is authenticated and music is playing
+- **Web interface not accessible**: Check firewall and service status
 
 ## License
 
-This project is provided as-is for educational and personal use.
+[Add your license here]
 
-## Credits
+## Contributing
 
-Built using examples from:
-- LEDMatrix project
-- Adafruit RGB Matrix libraries
-- rpi-rgb-led-matrix by hzeller
+[Add contribution guidelines here]
 
