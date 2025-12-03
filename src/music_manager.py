@@ -400,7 +400,8 @@ class MusicManager:
             if self.preferred_source == "spotify" and self.spotify and self.spotify.is_authenticated():
                 try:
                     spotify_track = self.spotify.get_current_track()
-                    if spotify_track and spotify_track.get('is_playing'):
+                    # Process track if it exists, regardless of playing/paused state
+                    if spotify_track and spotify_track.get('item'):
                         polled_track_info_data = spotify_track
                         source_for_callback = MusicSource.SPOTIFY
                         simplified_info_poll = self.get_simplified_track_info(polled_track_info_data, MusicSource.SPOTIFY)
@@ -442,13 +443,15 @@ class MusicManager:
                                      self.last_album_art_url = new_album_art_url
                                 self.current_track_info['album_art_url_prev_spotify'] = new_album_art_url
 
-                                logger.debug(f"Polling Spotify: Active track - {spotify_track.get('item', {}).get('name')}")
+                                track_name = spotify_track.get('item', {}).get('name', 'Unknown')
+                                is_playing = spotify_track.get('is_playing', False)
+                                logger.debug(f"Polling Spotify: Track '{track_name}' - {'Playing' if is_playing else 'Paused'}")
                             else:
                                 logger.debug("Polling Spotify: No change in simplified track info.")
                         
                     else:
-                        logger.debug("Polling Spotify: No active track or player paused.")
-                        # If Spotify was playing and now it's not
+                        logger.debug("Polling Spotify: No active track.")
+                        # Only set to "Nothing Playing" if there's actually no track
                         with self.track_info_lock:
                             if self.current_source == MusicSource.SPOTIFY:
                                 simplified_info_for_callback = self.get_simplified_track_info(None, MusicSource.NONE)
@@ -458,7 +461,7 @@ class MusicManager:
                                 self._needs_immediate_full_refresh = True # Reset display state
                                 self.album_art_image = None # Clear art
                                 self.last_album_art_url = None
-                                logger.info("Polling Spotify: Player stopped. Updating to Nothing Playing.")
+                                logger.info("Polling Spotify: No track loaded. Updating to Nothing Playing.")
 
 
                 except Exception as e:
@@ -536,7 +539,9 @@ class MusicManager:
             item = track_data.get('item', {})
             is_playing_spotify = track_data.get('is_playing', False)
 
-            if not item or not is_playing_spotify:
+            # Only return "Nothing Playing" if there's no track item
+            # If there's a track but it's paused, still show the track info
+            if not item:
                 return nothing_playing_info.copy()
 
             return {
@@ -547,7 +552,7 @@ class MusicManager:
                 'album_art_url': item.get('album', {}).get('images', [{}])[0].get('url') if item.get('album', {}).get('images') else None,
                 'duration_ms': item.get('duration_ms'),
                 'progress_ms': track_data.get('progress_ms'),
-                'is_playing': is_playing_spotify, # Should be true here
+                'is_playing': is_playing_spotify, # Can be True (playing) or False (paused)
             }
         elif source == MusicSource.YTM and track_data:
             video_info = track_data.get('video', {})
@@ -599,6 +604,42 @@ class MusicManager:
             # This covers cases where source is NONE, or track_data is None for Spotify/YTM
             return nothing_playing_info.copy()
 
+    def play_pause(self):
+        """Toggle play/pause on the current music source"""
+        if self.preferred_source == "spotify" and self.spotify:
+            return self.spotify.play_pause()
+        elif self.preferred_source == "ytm" and self.ytm:
+            # YTM control would go here if implemented
+            logger.warning("YTM playback control not yet implemented")
+            return False
+        else:
+            logger.warning("No active music source for playback control")
+            return False
+    
+    def skip_next(self):
+        """Skip to next track"""
+        if self.preferred_source == "spotify" and self.spotify:
+            return self.spotify.skip_next()
+        elif self.preferred_source == "ytm" and self.ytm:
+            # YTM control would go here if implemented
+            logger.warning("YTM playback control not yet implemented")
+            return False
+        else:
+            logger.warning("No active music source for skip control")
+            return False
+    
+    def skip_previous(self):
+        """Skip to previous track"""
+        if self.preferred_source == "spotify" and self.spotify:
+            return self.spotify.skip_previous()
+        elif self.preferred_source == "ytm" and self.ytm:
+            # YTM control would go here if implemented
+            logger.warning("YTM playback control not yet implemented")
+            return False
+        else:
+            logger.warning("No active music source for skip control")
+            return False
+    
     def get_current_display_info(self):
         """Returns the currently stored track information for display."""
         with self.track_info_lock:
@@ -895,7 +936,7 @@ class MusicManager:
             self.artist_scroll_tick = 0
             
         # --- Album ---
-        if (matrix_height - y_pos_album_top) >= LINE_HEIGHT_BDF : 
+        if (matrix_height - y_pos_album_top) >= LINE_HEIGHT_SMALL : 
             album_width = self.display_manager.get_text_width(album, font_artist_album)
             # Display album if it fits or can be scrolled (maintains original behavior but adds scrolling)
             if album_width <= text_area_width:

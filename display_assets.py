@@ -5,8 +5,10 @@ Handles logos, icons, and images
 
 import os
 import logging
+import requests
 from PIL import Image
 from typing import Optional, Dict
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +19,9 @@ class AssetLoader:
     def __init__(self, assets_dir: str = "assets"):
         self.assets_dir = assets_dir
         self.logo_cache = {}
+        self.download_cache = {}  # Cache for download attempts to avoid repeated failures
         
-    def get_sport_logo(self, sport_id: str, team_abbr: str = None) -> Optional[Image.Image]:
+    def get_sport_logo(self, sport_id: str, team_abbr: str = None, logo_url: str = None) -> Optional[Image.Image]:
         """Get sport or team logo"""
         try:
             # Map sport IDs to logo directories
@@ -78,6 +81,22 @@ class AssetLoader:
                             else:
                                 logger.info(f"Using cached logo: {logo_path}")
                                 return self.logo_cache[logo_path]
+                    # Logo not found locally, try to download from internet
+                    # First try provided logo_url, then try generic download
+                    logger.info(f"Logo not found locally for {team_abbr}, attempting to download from internet...")
+                    downloaded_logo = None
+                    if logo_url:
+                        logger.info(f"Trying to download from provided URL: {logo_url}")
+                        downloaded_logo = self._download_logo_from_url(logo_url, team_abbr_clean, sport_id, logo_dir)
+                    if not downloaded_logo:
+                        logger.info(f"Trying generic download for {team_abbr} ({sport_id})")
+                        downloaded_logo = self._download_team_logo(team_abbr_clean, sport_id, logo_dir)
+                    if downloaded_logo:
+                        logger.info(f"Successfully downloaded logo for {team_abbr}")
+                        return downloaded_logo
+                    else:
+                        logger.warning(f"Failed to download logo for {team_abbr} from internet, falling back to conference logo")
+                    
                     logger.warning(f"Logo not found for {team_abbr} in {logo_dir}, trying conference/league logo...")
                 else:
                     # Try all directories as fallback
@@ -96,6 +115,16 @@ class AssetLoader:
                                         continue
                                 else:
                                     return self.logo_cache[logo_path]
+                    
+                    # Try downloading if not found in any directory
+                    downloaded_logo = None
+                    if logo_url:
+                        downloaded_logo = self._download_logo_from_url(logo_url, team_abbr_clean, sport_id, None)
+                    if not downloaded_logo:
+                        downloaded_logo = self._download_team_logo(team_abbr_clean, sport_id, None)
+                    if downloaded_logo:
+                        return downloaded_logo
+                    
                     logger.warning(f"Logo not found for {team_abbr} in any directory, trying conference/league logo...")
                 
                 # Try conference logo for NCAA teams (fallback if team logo not found)
@@ -146,6 +175,161 @@ class AssetLoader:
         except Exception as e:
             logger.error(f"Could not load sport logo for {sport_id}/{team_abbr}: {e}")
         return None
+    
+    def _download_logo_from_url(self, logo_url: str, team_abbr: str, sport_id: str, logo_dir: Optional[str]) -> Optional[Image.Image]:
+        """Download logo from a specific URL"""
+        try:
+            if not logo_url:
+                return None
+            logger.info(f"Downloading logo from provided URL: {logo_url}")
+            response = requests.get(logo_url, timeout=5, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            
+            logger.info(f"Response status: {response.status_code} for provided URL: {logo_url}")
+            
+            if response.status_code == 200:
+                content_type = response.headers.get('content-type', '')
+                logger.info(f"Content type: {content_type} for provided URL")
+                if 'image' in content_type:
+                    try:
+                        img = Image.open(BytesIO(response.content)).convert('RGBA')
+                        
+                        # Save to local directory
+                        if logo_dir:
+                            os.makedirs(os.path.join(self.assets_dir, logo_dir), exist_ok=True)
+                            save_path = os.path.join(self.assets_dir, logo_dir, f"{team_abbr}.png")
+                        else:
+                            default_dir = os.path.join(self.assets_dir, 'sports', 'ncaa_logos')
+                            os.makedirs(default_dir, exist_ok=True)
+                            save_path = os.path.join(default_dir, f"{team_abbr}.png")
+                        
+                        try:
+                            img.save(save_path, 'PNG')
+                            logger.info(f"Downloaded and saved logo for {team_abbr} from URL to {save_path}")
+                        except Exception as save_error:
+                            logger.warning(f"Could not save downloaded logo: {save_error}")
+                        
+                        self.logo_cache[save_path] = img
+                        return img
+                    except Exception as img_error:
+                        logger.warning(f"Failed to parse image from provided URL {logo_url}: {img_error}")
+                else:
+                    logger.warning(f"Provided URL returned non-image content type: {content_type}")
+            else:
+                logger.warning(f"Provided URL returned status code {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Error downloading logo from URL {logo_url}: {e}")
+        return None
+    
+    def _download_team_logo(self, team_abbr: str, sport_id: str, logo_dir: Optional[str]) -> Optional[Image.Image]:
+        """Download team logo from internet if not found locally"""
+        try:
+            # Skip if we've already tried to download this logo and failed
+            cache_key = f"{sport_id}_{team_abbr}"
+            if cache_key in self.download_cache:
+                if self.download_cache[cache_key] is False:
+                    logger.debug(f"Skipping download for {team_abbr} - previously failed")
+                return None
+            
+            # Try multiple logo sources
+            logo_urls = []
+            
+            # 1. ESPN API logo URL pattern
+            # ESPN uses: https://a.espncdn.com/i/teamlogos/sports/league/team.png
+            sport_map = {
+                'nfl': ('nfl', '32'),
+                'nba': ('nba', '32'),
+                'mlb': ('mlb', '40'),
+                'nhl': ('nhl', '40'),
+                'ncaaf': ('ncaaf', '40'),
+                'ncaab': ('ncaab', '40'),
+                'ncaam': ('ncaab', '40'),
+                'ncaa': ('ncaab', '40'),  # Add ncaa mapping
+                'college-football': ('ncaaf', '40'),
+                'college-basketball': ('ncaab', '40'),
+                'mens-college-basketball': ('ncaab', '40')
+            }
+            
+            sport_key, size = sport_map.get(sport_id.lower(), ('ncaab', '40'))
+            espn_url = f"https://a.espncdn.com/i/teamlogos/{sport_key}/{size}/{team_abbr}.png"
+            logo_urls.append(espn_url)
+            
+            # 2. Alternative ESPN URL pattern (sometimes uses different paths)
+            espn_url2 = f"https://a.espncdn.com/i/teamlogos/{sport_key}/500/{team_abbr}.png"
+            logo_urls.append(espn_url2)
+            
+            # 3. Try full team name variations for college teams
+            if sport_id.lower() in ['ncaaf', 'ncaab', 'ncaam', 'ncaa']:
+                # Try with full team name (might need to be lowercase or different format)
+                espn_url3 = f"https://a.espncdn.com/i/teamlogos/ncaab/40/{team_abbr.lower()}.png"
+                logo_urls.append(espn_url3)
+            
+            # 4. Try teamlogos.com (free logo service) - commented out as it may not work
+            # teamlogos_url = f"https://www.teamlogos.com/logos/{team_abbr}.png"
+            # logo_urls.append(teamlogos_url)
+            
+            # Try each URL
+            for i, logo_url in enumerate(logo_urls, 1):
+                try:
+                    logger.info(f"Attempting to download logo from source {i}/{len(logo_urls)}: {logo_url}")
+                    response = requests.get(logo_url, timeout=5, headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    })
+                    
+                    logger.info(f"Response status: {response.status_code} for {logo_url}")
+                    
+                    if response.status_code == 200:
+                        # Check if it's actually an image
+                        content_type = response.headers.get('content-type', '')
+                        logger.info(f"Content type: {content_type} for {logo_url}")
+                        if 'image' in content_type:
+                            # Verify it's actually a valid image by trying to open it
+                            try:
+                                img = Image.open(BytesIO(response.content)).convert('RGBA')
+                                
+                                # Save to local directory for future use
+                                if logo_dir:
+                                    os.makedirs(os.path.join(self.assets_dir, logo_dir), exist_ok=True)
+                                    save_path = os.path.join(self.assets_dir, logo_dir, f"{team_abbr}.png")
+                                else:
+                                    # Default to ncaa_logos if no directory specified
+                                    default_dir = os.path.join(self.assets_dir, 'sports', 'ncaa_logos')
+                                    os.makedirs(default_dir, exist_ok=True)
+                                    save_path = os.path.join(default_dir, f"{team_abbr}.png")
+                                
+                                try:
+                                    img.save(save_path, 'PNG')
+                                    logger.info(f"Downloaded and saved logo for {team_abbr} to {save_path}")
+                                except Exception as save_error:
+                                    logger.warning(f"Could not save downloaded logo: {save_error}")
+                                
+                                # Cache the image
+                                self.logo_cache[save_path] = img
+                                self.download_cache[cache_key] = True
+                                return img
+                            except Exception as img_error:
+                                logger.warning(f"Failed to parse image from {logo_url}: {img_error}")
+                                continue
+                        else:
+                            logger.warning(f"URL returned non-image content type: {content_type} for {logo_url}")
+                    else:
+                        logger.warning(f"URL returned status code {response.status_code} for {logo_url}")
+                except requests.exceptions.RequestException as e:
+                    logger.debug(f"Request exception for {logo_url}: {e}")
+                    continue
+                except Exception as e:
+                    logger.debug(f"Error processing downloaded logo from {logo_url}: {e}")
+                    continue
+            
+            # Mark as failed to avoid repeated attempts
+            self.download_cache[cache_key] = False
+            logger.warning(f"Could not download logo for {team_abbr} from any of {len(logo_urls)} sources")
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error in _download_team_logo for {team_abbr}: {e}")
+            return None
     
     def get_stock_icon(self, ticker: str) -> Optional[Image.Image]:
         """Get stock/crypto icon"""

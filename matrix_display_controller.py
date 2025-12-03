@@ -96,7 +96,9 @@ class MatrixDisplay:
             options.cols = 64
             options.chain_length = 1
             options.parallel = 1
-            options.hardware_mapping = 'adafruit-hat-pwm'  # For pins 4/18 connection
+            # Try different hardware mappings - the test program might use a different one
+            # Common options: 'regular', 'adafruit-hat', 'adafruit-hat-pwm', 'adafruit-rgb-matrix-pi'
+            options.hardware_mapping = 'adafruit-hat-pwm'  # Use adafruit-hat-pwm for better flicker reduction
             
             # Pi 3B optimized settings for reduced flickering
             options.brightness = self.brightness
@@ -129,7 +131,13 @@ class MatrixDisplay:
             self.offscreen_canvas = self.matrix.CreateFrameCanvas()
             self.image = Image.new('RGB', (self.matrix.width, self.matrix.height))
             self.draw = ImageDraw.Draw(self.image)
+            
+            # Verify matrix is actually initialized and can be queried
             logger.info(f"RGB Matrix initialized successfully (hardware_pulsing={use_hardware_pulsing})")
+            logger.info(f"Matrix dimensions: {self.matrix.width}x{self.matrix.height}")
+            logger.info(f"Matrix object type: {type(self.matrix)}")
+            logger.info(f"Offscreen canvas type: {type(self.offscreen_canvas)}")
+            
             
         except Exception as e:
             logger.error(f"Failed to initialize RGB Matrix: {e}", exc_info=True)
@@ -166,16 +174,7 @@ class MatrixDisplay:
             self.font = ImageFont.load_default()
             self.small_font = ImageFont.load_default()
         
-        # Show test pattern after fonts are loaded
-        if self.matrix and self.draw:
-            try:
-                self.draw.rectangle([0, 0, self.matrix.width-1, self.matrix.height-1], fill=(0, 0, 0))
-                self.draw.text((10, 10), "READY", font=self.font, fill=(0, 255, 0))
-                self.update()
-                logger.info("Test pattern displayed successfully")
-                time.sleep(1)  # Show "READY" for 1 second
-            except Exception as e:
-                logger.warning(f"Could not show test pattern: {e}")
+        # Display is ready - no test pattern needed
             
     def set_brightness(self, brightness: int):
         """Set display brightness (0-100)"""
@@ -192,18 +191,44 @@ class MatrixDisplay:
         
     def clear(self):
         """Clear the display"""
-        if self.image:
+        if self.image and self.draw:
+            logger.debug(f"Clearing display, current image size: {self.image.size if self.image else 'None'}")
+            # Fill existing image with black instead of creating a new one
+            # This preserves the image reference which might be important for the offscreen canvas
+            self.draw.rectangle([0, 0, self.image.width-1, self.image.height-1], fill=(0, 0, 0))
+            logger.debug("Display cleared by filling with black")
+        elif self.image:
+            # If draw doesn't exist, recreate both
             self.image = Image.new('RGB', (self.image.width, self.image.height))
             self.draw = ImageDraw.Draw(self.image)
+            logger.debug("Display cleared, new image created (draw was None)")
             
     def update(self):
         """Update the display"""
-        if self.matrix and self.offscreen_canvas:
-            try:
-                self.offscreen_canvas.SetImage(self.image)
+        if not self.matrix:
+            logger.warning("Matrix not initialized, cannot update display")
+            return
+        if not self.offscreen_canvas:
+            logger.warning("Offscreen canvas not initialized, cannot update display")
+            return
+        if not self.image:
+            logger.warning("Image buffer not initialized, cannot update display")
+            return
+        try:
+            # Update display
+            logger.debug(f"Calling SetImage and SwapOnVSync, image size: {self.image.size if self.image else 'None'}")
+            # Make sure we're using the current image reference
+            current_image = self.image
+            if current_image:
+                self.offscreen_canvas.SetImage(current_image)
                 self.offscreen_canvas = self.matrix.SwapOnVSync(self.offscreen_canvas)
-            except Exception as e:
-                logger.error(f"Error updating display: {e}", exc_info=True)
+                logger.debug("Matrix hardware update completed successfully")
+            else:
+                logger.error("update(): Image is None, cannot update display")
+        except Exception as e:
+            logger.error(f"Error updating display: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
                 
     def draw_text(self, text: str, x: int = None, y: int = None, 
                   color: tuple = (255, 255, 255), small: bool = False, center: bool = True):
@@ -265,7 +290,7 @@ class DisplayController:
         # Mode state
         self.current_mode = "clock"
         self.mode_index = 0
-        self.modes = ["clock", "sports", "stocks", "weather", "music", "brightness"]
+        self.modes = ["clock", "sports", "stocks", "weather", "music", "images", "brightness"]
         
         # Clock state - handle timezone errors gracefully
         try:
@@ -283,10 +308,14 @@ class DisplayController:
         
         # Sports state
         self.sports_list = self.config.get('sports', [])
+        self.favorite_teams = self.config.get('favorite_teams', [])
         self.current_sport = 0
         self.current_game = 0
         self.sports_data_cache = {}  # Cache for sports scores
-        self.last_sports_update = 0
+        self.favorites_cache = []  # Cache for favorite team games (list, not dict)
+        self.last_sports_update = {}  # Track last update time per sport_id (dict)
+        self.date_range_cache = {}  # Cache for date range game fetches (sport_id -> (games, timestamp))
+        self.last_favorites_date_range_update = 0  # Track when we last fetched date ranges for favorites
         
         # Stocks state - combine stocks and crypto into one list
         self.stocks_list = self.config.get('stocks', [])
@@ -301,6 +330,16 @@ class DisplayController:
         self.current_weather_location = 0
         self.weather_data_cache = {}  # Cache for weather data
         self.last_weather_update = 0
+        
+        # Images state
+        self.current_image_list = "photos"  # "photos" or "gifs"
+        self.current_image_index = 0
+        self.photo_list = []
+        self.gif_list = []
+        self.current_gif_frame = 0
+        self.last_gif_update = 0
+        self.current_gif_image = None
+        self._load_image_lists()
         
         # Initialize managers if available
         self.config_manager = None
@@ -467,10 +506,28 @@ class DisplayController:
             self.weather_manager = None
             self.stock_manager = None
             
-        self.last_update = time.time()
-        self.update_interval = 1.0  # Update every second
+        self.last_update = 0  # Initialize to 0 so first update happens immediately
+        self.update_interval = 0.1  # Update every 0.1 seconds for smoother display and responsiveness
         self.reload_file = "/tmp/matrix_display_reload"
         self.last_config_check = time.time()
+        
+        # Preload favorites cache in background if favorite teams are configured
+        if self.favorite_teams:
+            def preload_favorites():
+                try:
+                    logger.info("Preloading favorites cache on startup...")
+                    favorite_games = self._get_favorite_games()
+                    self.favorites_cache = favorite_games
+                    self.last_favorites_date_range_update = time.time()
+                    logger.info(f"Preloaded {len(favorite_games)} favorite games on startup")
+                except Exception as e:
+                    logger.error(f"Error preloading favorites cache: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            import threading
+            preload_thread = threading.Thread(target=preload_favorites, daemon=True)
+            preload_thread.start()
         
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load configuration from JSON file"""
@@ -528,10 +585,18 @@ class DisplayController:
             # Update state from new config
             self.clock_locations = self.config.get('clock_locations', [])
             self.sports_list = self.config.get('sports', [])
+            self.favorite_teams = self.config.get('favorite_teams', [])
+            # Clamp current_sport to valid range after config reload
+            effective_list = self._get_effective_sports_list()
+            if effective_list and self.current_sport >= len(effective_list):
+                self.current_sport = 0
+                self.current_game = 0
             self.stocks_list = self.config.get('stocks', [])
             self.crypto_list = self.config.get('crypto', [])
             self.all_tickers = self.stocks_list + self.crypto_list
             self.weather_locations = self.config.get('weather_locations', [])
+            # Reload image lists
+            self._load_image_lists()
             # Update brightness
             new_brightness = self.config.get('brightness', 50)
             if new_brightness != self.matrix.brightness:
@@ -658,24 +723,304 @@ class DisplayController:
             logger.info(f"Clock location: {self.current_clock_location}")
             
     # Sports mode controls
+    def _get_effective_sports_list(self):
+        """Get sports list with favorites prepended if they exist"""
+        effective_list = []
+        # Add favorites as first item if any favorites exist
+        if self.favorite_teams and len(self.favorite_teams) > 0:
+            effective_list.append({'name': 'FAVORITES', 'id': 'favorites', 'is_favorites': True})
+        # Add regular sports
+        effective_list.extend(self.sports_list)
+        return effective_list
+    
+    def _get_favorite_games(self):
+        """Get all games involving favorite teams, including closest previous/next games"""
+        favorite_games = []
+        if not self.favorite_teams or len(self.favorite_teams) == 0:
+            logger.debug("No favorite teams configured")
+            return favorite_games
+        
+        # Get favorite teams with their sports
+        favorite_teams_by_sport = {}
+        for fav in self.favorite_teams:
+            sport = fav.get('sport', '').lower().strip()
+            team_abbr = fav.get('team', '').upper().strip()
+            if sport and team_abbr:
+                if sport not in favorite_teams_by_sport:
+                    favorite_teams_by_sport[sport] = set()
+                favorite_teams_by_sport[sport].add(team_abbr)
+        
+        if not favorite_teams_by_sport:
+            logger.debug("No valid favorite teams found")
+            return favorite_games
+        
+        logger.debug(f"Looking for favorite teams by sport: {favorite_teams_by_sport}")
+        
+        # Get current time for comparison
+        from datetime import datetime
+        now = datetime.now()
+        current_time = time.time()
+        
+        # Cache date range fetches for 10 minutes to avoid blocking
+        DATE_RANGE_CACHE_TTL = 600  # 10 minutes
+        
+        # For each sport with favorite teams, fetch games from a date range (with caching)
+        for sport_id, team_set in favorite_teams_by_sport.items():
+            try:
+                # Check cache first
+                cached_data = self.date_range_cache.get(sport_id)
+                all_games = None
+                
+                if cached_data and (current_time - cached_data[1]) < DATE_RANGE_CACHE_TTL:
+                    # Use cached data
+                    all_games = cached_data[0]
+                    logger.debug(f"Using cached date range games for {sport_id} ({len(all_games)} games)")
+                else:
+                    # Fetch games using sport-specific date ranges
+                    from sports_fetcher import fetch_espn_scores_for_date_range, fetch_espn_scores_for_week, fetch_ncaaf_games_with_week_iteration
+                    
+                    if sport_id == 'nfl':
+                        # NFL: Use current week (check cache first, then fetch if needed)
+                        if sport_id in self.sports_data_cache:
+                            # Use already-fetched current week games from regular sports page
+                            all_games = self.sports_data_cache[sport_id]
+                            logger.debug(f"Using cached NFL games from sports_data_cache ({len(all_games)} games)")
+                        else:
+                            # Fetch current week
+                            all_games = fetch_espn_scores_for_week('nfl', week_offset=0)
+                            logger.info(f"Fetched NFL current week games ({len(all_games)} games)")
+                    elif sport_id == 'ncaaf':
+                        # NCAAF: For each favorite team, iterate through weeks until games found
+                        all_games = []
+                        for team_abbr in team_set:
+                            team_games = fetch_ncaaf_games_with_week_iteration(team_abbr, max_weeks_back=4)
+                            all_games.extend(team_games)
+                        # Remove duplicates
+                        seen_games = set()
+                        unique_games = []
+                        for game in all_games:
+                            game_key = (
+                                game.get('date', ''),
+                                game.get('home_team', ''),
+                                game.get('away_team', '')
+                            )
+                            if game_key not in seen_games:
+                                seen_games.add(game_key)
+                                unique_games.append(game)
+                        all_games = unique_games
+                        logger.info(f"Fetched NCAAF games for favorite teams ({len(all_games)} unique games)")
+                    elif sport_id in ['nba', 'nhl']:
+                        # NBA/NHL: Previous day, today, next day (3 days)
+                        all_games = fetch_espn_scores_for_date_range(sport_id, days_back=1, days_forward=1)
+                        logger.info(f"Fetched {sport_id} games for previous day, today, next day ({len(all_games)} games)")
+                    elif sport_id in ['ncaam', 'ncaab']:
+                        # NCAAM: Previous 2 days, next 5 days (7 days)
+                        all_games = fetch_espn_scores_for_date_range(sport_id, days_back=2, days_forward=5)
+                        logger.info(f"Fetched {sport_id} games for previous 2 days, next 5 days ({len(all_games)} games)")
+                    else:
+                        # Default: 3 days back, 7 days forward
+                        all_games = fetch_espn_scores_for_date_range(sport_id, days_back=3, days_forward=7)
+                        logger.info(f"Fetched {sport_id} games with default date range ({len(all_games)} games)")
+                    
+                    # Cache the results
+                    self.date_range_cache[sport_id] = (all_games, current_time)
+                    logger.info(f"Cached {len(all_games)} games for {sport_id}")
+                
+                # For each favorite team in this sport, find closest previous and next games
+                for team_abbr in team_set:
+                    team_games = []
+                    for game in all_games:
+                        away_team = game.get('away_team', '').upper().strip()
+                        home_team = game.get('home_team', '').upper().strip()
+                        if away_team == team_abbr or home_team == team_abbr:
+                            # Parse game date
+                            game_date = None
+                            date_str = game.get('date', '')
+                            if date_str:
+                                try:
+                                    # Parse ISO format date
+                                    if 'Z' in date_str:
+                                        game_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                                    elif '+' in date_str or date_str.count('-') >= 3:
+                                        game_date = datetime.fromisoformat(date_str)
+                                    else:
+                                        # Try parsing as YYYY-MM-DDTHH:MM:SS
+                                        game_date = datetime.fromisoformat(date_str.split('.')[0])
+                                    
+                                    # Make timezone-naive for comparison
+                                    if game_date.tzinfo:
+                                        game_date = game_date.replace(tzinfo=None)
+                                except Exception as e:
+                                    logger.debug(f"Error parsing date '{date_str}': {e}")
+                                    continue
+                            
+                            if game_date:
+                                game['_parsed_date'] = game_date
+                                game['_time_diff'] = (game_date - now).total_seconds()
+                                team_games.append(game)
+                    
+                    # Find closest previous and next games
+                    previous_games = [g for g in team_games if g.get('_time_diff', 0) < 0]  # Past games
+                    next_games = [g for g in team_games if g.get('_time_diff', 0) >= 0]  # Future/current games
+                    
+                    # Sort previous games by date (most recent first)
+                    previous_games.sort(key=lambda g: g.get('_time_diff', 0), reverse=True)
+                    # Sort next games by date (soonest first)
+                    next_games.sort(key=lambda g: g.get('_time_diff', 0))
+                    
+                    # Add closest previous game (if any)
+                    if previous_games:
+                        closest_previous = previous_games[0].copy()
+                        closest_previous['sport_id'] = sport_id
+                        closest_previous['_is_closest_previous'] = True
+                        favorite_games.append(closest_previous)
+                        logger.debug(f"Found closest previous game for {team_abbr}: {closest_previous.get('away_team')} @ {closest_previous.get('home_team')} on {closest_previous.get('date', '')[:10]}")
+                    
+                    # Add closest next game (if any)
+                    if next_games:
+                        closest_next = next_games[0].copy()
+                        closest_next['sport_id'] = sport_id
+                        closest_next['_is_closest_next'] = True
+                        favorite_games.append(closest_next)
+                        logger.debug(f"Found closest next game for {team_abbr}: {closest_next.get('away_team')} @ {closest_next.get('home_team')} on {closest_next.get('date', '')[:10]}")
+                    
+                    # Also add any live games for this team (they might not be closest)
+                    for game in team_games:
+                        if game.get('is_live', False):
+                            game_copy = game.copy()
+                            game_copy['sport_id'] = sport_id
+                            # Check if we already added this game
+                            if not any(
+                                g.get('away_team') == game_copy.get('away_team') and
+                                g.get('home_team') == game_copy.get('home_team') and
+                                g.get('date') == game_copy.get('date')
+                                for g in favorite_games
+                            ):
+                                favorite_games.append(game_copy)
+                                logger.debug(f"Found live game for {team_abbr}: {game_copy.get('away_team')} @ {game_copy.get('home_team')}")
+                
+            except Exception as e:
+                logger.error(f"Error fetching games for favorite sport {sport_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        # Also check games already in cache (for today's games that might already be loaded)
+        favorite_team_set = set()
+        for fav in self.favorite_teams:
+            team_abbr = fav.get('team', '').upper().strip()
+            if team_abbr:
+                favorite_team_set.add(team_abbr)
+        
+        for sport_id in self.sports_data_cache.keys():
+            games = self.sports_data_cache.get(sport_id, [])
+            for game in games:
+                away_team = game.get('away_team', '').upper().strip()
+                home_team = game.get('home_team', '').upper().strip()
+                if away_team in favorite_team_set or home_team in favorite_team_set:
+                    # Check if we already added this game
+                    if not any(
+                        g.get('away_team') == game.get('away_team') and
+                        g.get('home_team') == game.get('home_team') and
+                        g.get('date') == game.get('date')
+                        for g in favorite_games
+                    ):
+                        game_copy = game.copy()
+                        game_copy['sport_id'] = sport_id
+                        favorite_games.append(game_copy)
+                        logger.debug(f"Found cached favorite game: {away_team} @ {home_team} ({sport_id})")
+        
+        # Sort: live games first, then scheduled (by date), then finished (by date, most recent first)
+        favorite_games.sort(key=lambda g: (
+            0 if g.get('is_live', False) else (1 if g.get('is_scheduled', False) else 2),
+            g.get('_time_diff', 0) if g.get('_time_diff') is not None else (999999999 if g.get('is_scheduled') else -999999999)
+        ))
+        
+        logger.info(f"Found {len(favorite_games)} total favorite games (including closest previous/next)")
+        return favorite_games
+    
     def next_sport(self):
         """Next sport"""
-        if self.sports_list:
-            self.current_sport = (self.current_sport + 1) % len(self.sports_list)
-            self.current_game = 0
+        effective_list = self._get_effective_sports_list()
+        if effective_list:
+            self.current_sport = (self.current_sport + 1) % len(effective_list)
+            # Only reset game index if switching away from favorites
+            current_sport_item = effective_list[(self.current_sport - 1) % len(effective_list)] if effective_list else None
+            if not (isinstance(current_sport_item, dict) and current_sport_item.get('is_favorites', False)):
+                self.current_game = 0
             logger.info(f"Sport: {self.current_sport}")
             
     def prev_sport(self):
         """Previous sport"""
-        if self.sports_list:
-            self.current_sport = (self.current_sport - 1) % len(self.sports_list)
-            self.current_game = 0
+        effective_list = self._get_effective_sports_list()
+        if effective_list:
+            self.current_sport = (self.current_sport - 1) % len(effective_list)
+            # Only reset game index if switching away from favorites
+            current_sport_item = effective_list[(self.current_sport + 1) % len(effective_list)] if effective_list else None
+            if not (isinstance(current_sport_item, dict) and current_sport_item.get('is_favorites', False)):
+                self.current_game = 0
             logger.info(f"Sport: {self.current_sport}")
             
     def next_game(self):
         """Next game in current sport - loops back to first game"""
+        effective_list = self._get_effective_sports_list()
+        
+        # Clamp current_sport to valid range
+        if effective_list and self.current_sport >= len(effective_list):
+            self.current_sport = 0
+        
+        sport = effective_list[self.current_sport] if effective_list and self.current_sport < len(effective_list) else None
+        
+        # Check if this is favorites
+        if isinstance(sport, dict) and sport.get('is_favorites', False):
+            # Use cached favorite games if available and fresh (cache for 5 minutes)
+            current_time = time.time()
+            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            
+            if (isinstance(self.favorites_cache, list) and 
+                len(self.favorites_cache) > 0 and
+                (current_time - self.last_favorites_date_range_update) < FAVORITES_CACHE_TTL):
+                # Use cached favorite games
+                favorite_games = self.favorites_cache
+                logger.debug(f"Using cached favorite games ({len(favorite_games)} games)")
+            else:
+                # Only fetch today's games for favorite sports (quick fetch)
+                favorite_sports = set()
+                for fav in self.favorite_teams:
+                    favorite_sports.add(fav.get('sport', '').lower())
+                
+                for sport_id in favorite_sports:
+                    if sport_id and (sport_id not in self.sports_data_cache or 
+                                     current_time - self.last_sports_update > 60):
+                        try:
+                            from sports_fetcher import fetch_espn_scores
+                            games = fetch_espn_scores(sport_id)
+                            if games:
+                                self.sports_data_cache[sport_id] = games
+                                logger.info(f"Fetched {len(games)} games for favorite sport {sport_id}")
+                        except Exception as e:
+                            logger.error(f"Error fetching games for favorite sport {sport_id}: {e}")
+                
+                # Get fresh favorite games list (this will use date range cache if available)
+                favorite_games = self._get_favorite_games()
+                self.favorites_cache = favorite_games
+                self.last_favorites_date_range_update = current_time
+            
+            if favorite_games and len(favorite_games) > 0:
+                old_game = self.current_game
+                self.current_game = (self.current_game + 1) % len(favorite_games)
+                logger.info(f"Favorite game: {old_game} -> {self.current_game} (total: {len(favorite_games)})")
+                # Force immediate display update
+                self.matrix.clear()
+                try:
+                    self.display_sports()
+                except Exception as e:
+                    logger.error(f"Error updating display after next_game (favorites): {e}")
+            else:
+                logger.warning(f"No favorite games available (count: {len(favorite_games) if favorite_games else 0})")
+            return
+        
         # Get current sport's games to determine loop
-        sport = self.sports_list[self.current_sport] if self.sports_list and self.current_sport < len(self.sports_list) else None
         if sport:
             # Use the same logic as display_sports() to extract sport_id
             if isinstance(sport, str):
@@ -704,7 +1049,7 @@ class DisplayController:
                     games = fetch_espn_scores(sport_id)
                     if games:
                         self.sports_data_cache[sport_id] = games
-                        self.last_sports_update = time.time()
+                        self.last_sports_update[sport_id] = time.time()
                         logger.info(f"Fetched {len(games)} games for sport {sport_id}")
                 except Exception as e:
                     logger.error(f"Error fetching games in next_game: {e}")
@@ -731,8 +1076,64 @@ class DisplayController:
         
     def prev_game(self):
         """Previous game in current sport - loops back to last game"""
+        effective_list = self._get_effective_sports_list()
+        
+        # Clamp current_sport to valid range
+        if effective_list and self.current_sport >= len(effective_list):
+            self.current_sport = 0
+        
+        sport = effective_list[self.current_sport] if effective_list and self.current_sport < len(effective_list) else None
+        
+        # Check if this is favorites
+        if isinstance(sport, dict) and sport.get('is_favorites', False):
+            # Use cached favorite games if available and fresh (cache for 5 minutes)
+            current_time = time.time()
+            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            
+            if (isinstance(self.favorites_cache, list) and 
+                len(self.favorites_cache) > 0 and
+                (current_time - self.last_favorites_date_range_update) < FAVORITES_CACHE_TTL):
+                # Use cached favorite games
+                favorite_games = self.favorites_cache
+                logger.debug(f"Using cached favorite games ({len(favorite_games)} games)")
+            else:
+                # Only fetch today's games for favorite sports (quick fetch)
+                favorite_sports = set()
+                for fav in self.favorite_teams:
+                    favorite_sports.add(fav.get('sport', '').lower())
+                
+                for sport_id in favorite_sports:
+                    if sport_id and (sport_id not in self.sports_data_cache or 
+                                     current_time - self.last_sports_update > 60):
+                        try:
+                            from sports_fetcher import fetch_espn_scores
+                            games = fetch_espn_scores(sport_id)
+                            if games:
+                                self.sports_data_cache[sport_id] = games
+                                logger.info(f"Fetched {len(games)} games for favorite sport {sport_id}")
+                        except Exception as e:
+                            logger.error(f"Error fetching games for favorite sport {sport_id}: {e}")
+                
+                # Get fresh favorite games list (this will use date range cache if available)
+                favorite_games = self._get_favorite_games()
+                self.favorites_cache = favorite_games
+                self.last_favorites_date_range_update = current_time
+            
+            if favorite_games and len(favorite_games) > 0:
+                old_game = self.current_game
+                self.current_game = (self.current_game - 1) % len(favorite_games)
+                logger.info(f"Favorite game: {old_game} -> {self.current_game} (total: {len(favorite_games)})")
+                # Force immediate display update
+                self.matrix.clear()
+                try:
+                    self.display_sports()
+                except Exception as e:
+                    logger.error(f"Error updating display after prev_game (favorites): {e}")
+            else:
+                logger.warning(f"No favorite games available (count: {len(favorite_games) if favorite_games else 0})")
+            return
+        
         # Get current sport's games to determine loop
-        sport = self.sports_list[self.current_sport] if self.sports_list and self.current_sport < len(self.sports_list) else None
         if sport:
             # Use the same logic as display_sports() to extract sport_id
             if isinstance(sport, str):
@@ -761,7 +1162,7 @@ class DisplayController:
                     games = fetch_espn_scores(sport_id)
                     if games:
                         self.sports_data_cache[sport_id] = games
-                        self.last_sports_update = time.time()
+                        self.last_sports_update[sport_id] = time.time()
                         logger.info(f"Fetched {len(games)} games for sport {sport_id}")
                 except Exception as e:
                     logger.error(f"Error fetching games in prev_game: {e}")
@@ -811,6 +1212,68 @@ class DisplayController:
         if self.weather_locations:
             self.current_weather_location = (self.current_weather_location - 1) % len(self.weather_locations)
             logger.info(f"Weather location: {self.current_weather_location}")
+    
+    # Images mode controls
+    def _load_image_lists(self):
+        """Load list of photos and GIFs from assets directories"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        photo_dir = os.path.join(script_dir, "assets", "photo_list")
+        gif_dir = os.path.join(script_dir, "assets", "gif_list")
+        
+        self.photo_list = []
+        self.gif_list = []
+        
+        # Load photos
+        if os.path.exists(photo_dir):
+            for filename in sorted(os.listdir(photo_dir)):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    self.photo_list.append(os.path.join(photo_dir, filename))
+        
+        # Load GIFs
+        if os.path.exists(gif_dir):
+            for filename in sorted(os.listdir(gif_dir)):
+                if filename.lower().endswith('.gif'):
+                    self.gif_list.append(os.path.join(gif_dir, filename))
+        
+        logger.info(f"Loaded {len(self.photo_list)} photos and {len(self.gif_list)} GIFs")
+    
+    def switch_image_list(self):
+        """Switch between photos and GIFs lists"""
+        if self.current_image_list == "photos":
+            self.current_image_list = "gifs"
+            self.current_image_index = 0
+            self.current_gif_frame = 0
+            self.current_gif_image = None
+        else:
+            self.current_image_list = "photos"
+            self.current_image_index = 0
+        logger.info(f"Switched to {self.current_image_list} list")
+    
+    def next_image(self):
+        """Next image in current list"""
+        if self.current_image_list == "photos":
+            if self.photo_list:
+                self.current_image_index = (self.current_image_index + 1) % len(self.photo_list)
+                logger.info(f"Photo: {self.current_image_index}")
+        else:
+            if self.gif_list:
+                self.current_image_index = (self.current_image_index + 1) % len(self.gif_list)
+                self.current_gif_frame = 0
+                self.current_gif_image = None
+                logger.info(f"GIF: {self.current_image_index}")
+    
+    def prev_image(self):
+        """Previous image in current list"""
+        if self.current_image_list == "photos":
+            if self.photo_list:
+                self.current_image_index = (self.current_image_index - 1) % len(self.photo_list)
+                logger.info(f"Photo: {self.current_image_index}")
+        else:
+            if self.gif_list:
+                self.current_image_index = (self.current_image_index - 1) % len(self.gif_list)
+                self.current_gif_frame = 0
+                self.current_gif_image = None
+                logger.info(f"GIF: {self.current_image_index}")
             
     # Brightness controls
     def brightness_up(self):
@@ -842,6 +1305,10 @@ class DisplayController:
     def _display_clock_fallback(self):
         """Fallback clock display"""
         try:
+            if not self.matrix:
+                logger.error("Matrix not initialized in _display_clock_fallback")
+                return
+            logger.debug("_display_clock_fallback: Starting clock display")
             self.matrix.clear()
             
             # Get timezone from current clock location, not default
@@ -889,13 +1356,20 @@ class DisplayController:
             
             # Display timezone abbreviation (should be short like "CST", "EST", "PST")
             self.matrix.draw_text(tz_abbr[:6], y=24, color=(150, 150, 150), small=True, center=True)
+            logger.debug(f"Clock display: time={time_str}, date={date_str}, tz={tz_abbr}")
             self.matrix.update()
         except Exception as e:
-            logger.error(f"Error in clock fallback: {e}")
+            logger.error(f"Error in clock fallback: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
             # Show error on display
-            self.matrix.clear()
-            self.matrix.draw_text("CLOCK ERR", y=10, color=(255, 0, 0))
-            self.matrix.update()
+            try:
+                if self.matrix:
+                    self.matrix.clear()
+                    self.matrix.draw_text("CLOCK ERR", y=10, color=(255, 0, 0))
+                    self.matrix.update()
+            except Exception as display_err:
+                logger.error(f"Error showing clock error on display: {display_err}")
             
     def display_sports(self):
         """Display sports mode with actual scores"""
@@ -906,14 +1380,278 @@ class DisplayController:
             self.matrix.image = Image.new('RGB', (self.matrix.image.width, self.matrix.image.height))
             self.matrix.draw = ImageDraw.Draw(self.matrix.image)
         
-        logger.debug(f"display_sports: sports_list={self.sports_list}, current_sport={self.current_sport}, len={len(self.sports_list) if self.sports_list else 0}")
-        if not self.sports_list or self.current_sport >= len(self.sports_list):
-            logger.warning(f"No sports configured or invalid index: sports_list={self.sports_list}, current_sport={self.current_sport}")
+        effective_list = self._get_effective_sports_list()
+        logger.debug(f"display_sports: effective_list length={len(effective_list)}, current_sport={self.current_sport}")
+        
+        # Clamp current_sport to valid range
+        if effective_list and self.current_sport >= len(effective_list):
+            logger.warning(f"current_sport {self.current_sport} out of bounds, clamping to 0 (effective_list length={len(effective_list)})")
+            self.current_sport = 0
+            self.current_game = 0
+        
+        if not effective_list or len(effective_list) == 0:
+            logger.warning(f"No sports configured: effective_list length={len(effective_list)}")
             self.matrix.draw_text("NO SPORTS", y=10, color=(255, 0, 0))
             self.matrix.update()
             return
             
-        sport = self.sports_list[self.current_sport]
+        sport = effective_list[self.current_sport]
+        
+        # Check if this is the favorites page
+        if isinstance(sport, dict) and sport.get('is_favorites', False):
+            # Display favorites - use cached data immediately for fast display
+            current_time = time.time()
+            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            
+            # Always use cached data first for immediate display
+            if (isinstance(self.favorites_cache, list) and 
+                len(self.favorites_cache) > 0 and
+                (current_time - self.last_favorites_date_range_update) < FAVORITES_CACHE_TTL):
+                # Use cached favorite games immediately
+                favorite_games = self.favorites_cache
+                logger.debug(f"Using cached favorite games in display_sports ({len(favorite_games)} games)")
+            else:
+                # Cache is stale or empty - use empty list for now, fetch in background
+                favorite_games = self.favorites_cache if isinstance(self.favorites_cache, list) else []
+                logger.debug(f"Favorites cache stale/empty, using existing cache ({len(favorite_games)} games) and fetching in background")
+                
+                # Trigger background fetch in a separate thread to avoid blocking
+                def fetch_favorites_background():
+                    try:
+                        # Get fresh favorite games list (this will use date range cache if available)
+                        fresh_games = self._get_favorite_games()
+                        self.favorites_cache = fresh_games
+                        self.last_favorites_date_range_update = time.time()
+                        logger.info(f"Background fetch completed: {len(fresh_games)} favorite games")
+                    except Exception as e:
+                        logger.error(f"Error in background favorite games fetch: {e}")
+                
+                import threading
+                fetch_thread = threading.Thread(target=fetch_favorites_background, daemon=True)
+                fetch_thread.start()
+            
+            if not favorite_games or len(favorite_games) == 0:
+                self.matrix.draw_text("NO FAVORITES", y=10, color=(255, 255, 0))
+                self.matrix.update()
+                return
+            
+            # Display favorite game - clamp index to valid range
+            # IMPORTANT: Make sure we don't reset the index if it's valid
+            if len(favorite_games) > 0:
+                if self.current_game >= len(favorite_games):
+                    self.current_game = 0
+                elif self.current_game < 0:
+                    self.current_game = len(favorite_games) - 1
+            else:
+                self.current_game = 0
+            
+            logger.info(f"Displaying favorite game {self.current_game} of {len(favorite_games)} total favorite games (cache type: {type(self.favorites_cache)})")
+            if len(favorite_games) == 0:
+                self.matrix.draw_text("NO FAVORITES", y=10, color=(255, 255, 0))
+                self.matrix.update()
+                return
+            
+            game = favorite_games[self.current_game]
+            sport_id = game.get('sport_id', 'sports')
+            
+            # Display game using same logic as regular sports
+            away = game.get('away_team', 'AWAY')[:4]
+            home = game.get('home_team', 'HOME')[:4]
+            away_score = str(game.get('away_score', 0))
+            home_score = str(game.get('home_score', 0))
+            
+            # Determine sport_id_for_logos
+            sport_id_for_logos = sport_id.lower()
+            if 'college-football' in sport_id_for_logos or 'ncaaf' in sport_id_for_logos:
+                sport_id_for_logos = 'ncaaf'
+            elif 'college-basketball' in sport_id_for_logos or 'mens-college-basketball' in sport_id_for_logos or 'ncaab' in sport_id_for_logos:
+                sport_id_for_logos = 'ncaab'
+            elif 'ncaa' in sport_id_for_logos:
+                sport_id_for_logos = 'ncaa'
+            
+            # Load logos and display (same as regular sports display)
+            away_logo = None
+            home_logo = None
+            if self.asset_loader:
+                try:
+                    away_logo_url = game.get('away_logo_url', '')
+                    away_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, away, logo_url=away_logo_url)
+                except Exception as e:
+                    logger.error(f"Error loading away logo: {e}")
+                try:
+                    home_logo_url = game.get('home_logo_url', '')
+                    home_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, home, logo_url=home_logo_url)
+                except Exception as e:
+                    logger.error(f"Error loading home logo: {e}")
+            
+            # Use same display logic as regular sports (reuse the code below)
+            # We'll fall through to the regular display code, but we need to set up the game data
+            # Actually, let's just call the same display code by setting up the variables
+            # But we need to skip the fetch logic, so let's handle it inline here
+            # For now, let's just reuse the display code by jumping to the game display section
+            # Actually, the simplest is to set sport_id to something that will work and use the existing display code
+            # But that's messy. Let me just duplicate the display logic for favorites.
+            # Actually, I think the best approach is to extract the game display into a helper method
+            # But for now, let's just inline it for favorites to get it working
+            
+            # Display logos, teams, scores, status (same as regular sports - see code below)
+            center_y = self.matrix.image.height // 2
+            logo_size = 24
+            
+            if away_logo:
+                try:
+                    away_logo_resized = away_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
+                    away_y = center_y - (logo_size // 2)
+                    away_x = 0
+                    if away_logo_resized.mode == 'RGBA':
+                        self.matrix.image.paste(away_logo_resized, (away_x, away_y), away_logo_resized)
+                    else:
+                        self.matrix.image.paste(away_logo_resized, (away_x, away_y))
+                except Exception as e:
+                    logger.error(f"Could not display away logo: {e}")
+            if home_logo:
+                try:
+                    home_logo_resized = home_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
+                    home_y = center_y - (logo_size // 2)
+                    home_x = self.matrix.image.width - logo_size
+                    if home_logo_resized.mode == 'RGBA':
+                        self.matrix.image.paste(home_logo_resized, (home_x, home_y), home_logo_resized)
+                    else:
+                        self.matrix.image.paste(home_logo_resized, (home_x, home_y))
+                except Exception as e:
+                    logger.error(f"Could not display home logo: {e}")
+            
+            teams_text = f"{away} @ {home}"
+            score_text = f"{away_score}-{home_score}"
+            
+            if self.matrix.draw:
+                teams_font = self.matrix.small_font
+                bbox = self.matrix.draw.textbbox((0, 0), teams_text, font=teams_font)
+                text_width = bbox[2] - bbox[0]
+                teams_x = (self.matrix.image.width - text_width) // 2
+                teams_y = 2
+                outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                for offset_x, offset_y in outline_offsets:
+                    self.matrix.draw.text((teams_x + offset_x, teams_y + offset_y), teams_text, 
+                                         font=teams_font, fill=(0, 0, 0))
+                self.matrix.draw.text((teams_x, teams_y), teams_text, font=teams_font, fill=(0, 255, 255))
+            
+            score_font = self.matrix.font
+            if self.matrix.draw:
+                bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
+                text_width = bbox[2] - bbox[0]
+                score_x = (self.matrix.image.width - text_width) // 2
+                score_y = center_y - 2
+                outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                for offset_x, offset_y in outline_offsets:
+                    self.matrix.draw.text((score_x + offset_x, score_y + offset_y), score_text, 
+                                         font=score_font, fill=(0, 0, 0))
+                self.matrix.draw.text((score_x, score_y), score_text, font=score_font, fill=(255, 255, 0))
+            
+            # Display status (reuse logic from regular sports - see below for full implementation)
+            status_text = ""
+            status_id = game.get('status_id', '').upper()
+            if 'FINAL' in status_id or game.get('is_final', False):
+                status_text = "FINAL"
+            elif 'IN_PROGRESS' in status_id or 'HALFTIME' in status_id or 'DELAYED' in status_id or game.get('is_live', False):
+                clock = game.get('clock', '')
+                period_name = game.get('period_name', '')
+                status_detail = game.get('status_detail', '')
+                if status_detail:
+                    if ' - ' in status_detail:
+                        parts = status_detail.split(' - ', 1)
+                        if len(parts) == 2:
+                            clock_part = parts[0].strip()
+                            period_part = parts[1].strip()
+                            status_text = f"{clock_part} {period_part}" if clock_part else period_part
+                        else:
+                            status_text = status_detail
+                    else:
+                        status_text = status_detail
+                elif clock and period_name:
+                    status_text = f"{clock} {period_name}"
+                elif period_name:
+                    status_text = period_name
+                elif clock:
+                    status_text = clock
+                else:
+                    status_text = "LIVE"
+            elif 'SCHEDULED' in status_id or 'PRE' in status_id or game.get('is_scheduled', False):
+                date_str = game.get('date', '')
+                if date_str:
+                    try:
+                        from datetime import datetime
+                        import pytz
+                        if 'Z' in date_str:
+                            game_date_utc = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                            if game_date_utc.tzinfo:
+                                local_tz_str = self.config.get('local_timezone', 'America/New_York')
+                                try:
+                                    local_tz = pytz.timezone(local_tz_str)
+                                except pytz.exceptions.UnknownTimeZoneError:
+                                    local_tz = pytz.timezone('America/New_York')
+                                game_date = game_date_utc.astimezone(local_tz)
+                            else:
+                                game_date = game_date_utc
+                        elif '+' in date_str or date_str.count('-') >= 3:
+                            game_date = datetime.fromisoformat(date_str)
+                            if game_date.tzinfo:
+                                local_tz_str = self.config.get('local_timezone', 'America/New_York')
+                                try:
+                                    local_tz = pytz.timezone(local_tz_str)
+                                except pytz.exceptions.UnknownTimeZoneError:
+                                    local_tz = pytz.timezone('America/New_York')
+                                game_date = game_date.astimezone(local_tz)
+                        else:
+                            game_date = datetime.fromisoformat(date_str.split('.')[0])
+                        month = game_date.month
+                        day = game_date.day
+                        date_display = f"{month}/{day}"
+                        hour = game_date.hour
+                        minute = game_date.minute
+                        am_pm = "AM" if hour < 12 else "PM"
+                        hour_12 = hour % 12
+                        if hour_12 == 0:
+                            hour_12 = 12
+                        time_display = f"{hour_12}:{minute:02d}{am_pm}"
+                        status_text = f"{date_display}{time_display}"
+                    except Exception as e:
+                        logger.error(f"Error parsing date '{date_str}': {e}")
+                        status_text = "SCHEDULED"
+            
+            if status_text:
+                max_chars = 12 if ('/' in status_text and ('AM' in status_text or 'PM' in status_text)) else 8
+                if len(status_text) > max_chars:
+                    status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
+                status_y = self.matrix.image.height - 6
+                if self.matrix.draw:
+                    try:
+                        tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
+                        if os.path.exists(tiny_font_path):
+                            status_font = ImageFont.truetype(tiny_font_path, 6)
+                            bbox = self.matrix.draw.textbbox((0, 0), status_text, font=status_font)
+                            text_width = bbox[2] - bbox[0]
+                            status_x = (self.matrix.image.width - text_width) // 2
+                            outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                            for offset_x, offset_y in outline_offsets:
+                                self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text, 
+                                                     font=status_font, fill=(0, 0, 0))
+                            self.matrix.draw.text((status_x, status_y), status_text, font=status_font, fill=(200, 200, 200))
+                        else:
+                            status_font = self.matrix.font
+                            bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
+                            text_width = bbox[2] - bbox[0]
+                            status_x = (self.matrix.image.width - text_width) // 2
+                            outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+                            for offset_x, offset_y in outline_offsets:
+                                self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
+                                                     font=status_font, fill=(0, 0, 0))
+                            self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
+                    except Exception as e:
+                        logger.debug(f"Error displaying status: {e}")
+            
+            self.matrix.update()
+            return
         
         # Handle different sport data formats
         if isinstance(sport, str):
@@ -953,18 +1691,54 @@ class DisplayController:
         
         logger.debug(f"Sport ID for scores: {sport_id}, for logos: {sport_id_for_logos}")
         
-        # Fetch scores if cache is old (update every 60 seconds)
+        # Fetch scores - update more frequently for live games
         current_time = time.time()
         
+        # Check if we have any live games to determine update frequency
+        has_live_games = False
+        if sport_id in self.sports_data_cache:
+            for game in self.sports_data_cache.get(sport_id, []):
+                if game.get('is_live', False):
+                    has_live_games = True
+                    break
+        
+        # Update every 10 seconds for live games, 60 seconds otherwise
+        update_interval = 10 if has_live_games else 60
+        
         # Check if we need to fetch/refresh games for this sport
-        if (sport_id not in self.sports_data_cache or 
-            current_time - self.last_sports_update > 60):
+        games = self.sports_data_cache.get(sport_id, [])
+        needs_fetch = (sport_id not in self.sports_data_cache or 
+                      current_time - self.last_sports_update.get(sport_id, 0) > update_interval)
+        
+        # If cache is stale, fetch in background but use cached data for immediate display
+        if needs_fetch and games:
+            # Use cached data immediately, fetch in background
+            logger.debug(f"Cache stale for {sport_id}, using cached data ({len(games)} games) and fetching in background")
+            
+            def fetch_sports_background():
+                try:
+                    from sports_fetcher import fetch_espn_scores
+                    fetched_games = fetch_espn_scores(sport_id)
+                    if fetched_games:
+                        self.sports_data_cache[sport_id] = fetched_games
+                        self.last_sports_update[sport_id] = time.time()
+                        logger.info(f"Background fetch completed: {len(fetched_games)} games for sport {sport_id}")
+                    else:
+                        logger.warning(f"No games returned from API for sport {sport_id}")
+                except Exception as e:
+                    logger.error(f"Error in background sports fetch for {sport_id}: {e}")
+            
+            import threading
+            fetch_thread = threading.Thread(target=fetch_sports_background, daemon=True)
+            fetch_thread.start()
+        elif needs_fetch:
+            # No cached data, fetch immediately (blocking, but only if no cache)
             try:
                 from sports_fetcher import fetch_espn_scores
                 games = fetch_espn_scores(sport_id)
                 if games:
                     self.sports_data_cache[sport_id] = games
-                    self.last_sports_update = current_time
+                    self.last_sports_update[sport_id] = current_time
                     logger.info(f"Fetched {len(games)} games for sport {sport_id}")
                 else:
                     logger.warning(f"No games returned from API for sport {sport_id}")
@@ -990,12 +1764,16 @@ class DisplayController:
             if self.asset_loader:
                 logger.info(f"Loading logos for sport_id={sport_id_for_logos}, away={away}, home={home}")
                 try:
-                    away_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, away)
+                    # Get logo URLs from game data if available
+                    away_logo_url = game.get('away_logo_url', '')
+                    away_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, away, logo_url=away_logo_url)
                     logger.info(f"Loading away logo for {away} (sport_id={sport_id_for_logos}): {away_logo is not None}")
                 except Exception as e:
                     logger.error(f"Error loading away logo: {e}")
                 try:
-                    home_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, home)
+                    # Get logo URLs from game data if available
+                    home_logo_url = game.get('home_logo_url', '')
+                    home_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, home, logo_url=home_logo_url)
                     logger.info(f"Loading home logo for {home} (sport_id={sport_id_for_logos}): {home_logo is not None}")
                 except Exception as e:
                     logger.error(f"Error loading home logo: {e}")
@@ -1081,12 +1859,30 @@ class DisplayController:
                 # Show clock and period for live games
                 clock = game.get('clock', '')
                 period_name = game.get('period_name', '')
-                if clock and period_name:
+                status_detail = game.get('status_detail', '')
+                status_short_detail = game.get('status_short_detail', '')
+                
+                # Prefer status_detail if available (e.g., "2:03 - 4th", "5:01 - 2nd Half")
+                if status_detail:
+                    # Extract just the essential part (clock and period)
+                    if ' - ' in status_detail:
+                        parts = status_detail.split(' - ', 1)
+                        if len(parts) == 2:
+                            clock_part = parts[0].strip()
+                            period_part = parts[1].strip()
+                            status_text = f"{clock_part} {period_part}" if clock_part else period_part
+                        else:
+                            status_text = status_detail
+                    else:
+                        status_text = status_detail
+                elif clock and period_name:
                     status_text = f"{clock} {period_name}"
                 elif period_name:
                     status_text = period_name
                 elif clock:
                     status_text = clock
+                elif status_short_detail:
+                    status_text = status_short_detail
                 else:
                     status_text = "LIVE"
             elif 'SCHEDULED' in status_id or 'PRE' in status_id or game.get('is_scheduled', False):
@@ -1122,8 +1918,10 @@ class DisplayController:
                         else:
                             game_date = datetime.fromisoformat(date_str.split('.')[0])
                         
-                        # Format as "MM/DD H:MMAM/PM"
-                        date_display = game_date.strftime("%m/%d")
+                        # Format as compact "M/D H:MMAM/PM" (remove leading zeros, no space)
+                        month = game_date.month
+                        day = game_date.day
+                        date_display = f"{month}/{day}"  # No leading zeros
                         hour = game_date.hour
                         minute = game_date.minute
                         am_pm = "AM" if hour < 12 else "PM"
@@ -1131,7 +1929,7 @@ class DisplayController:
                         if hour_12 == 0:
                             hour_12 = 12
                         time_display = f"{hour_12}:{minute:02d}{am_pm}"
-                        status_text = f"{date_display} {time_display}"
+                        status_text = f"{date_display}{time_display}"  # No space to save room
                         logger.debug(f"Formatted scheduled game time: {status_text}")
                     except Exception as e:
                         logger.error(f"Error parsing date '{date_str}': {e}")
@@ -1147,48 +1945,51 @@ class DisplayController:
                 if len(status_text) > max_chars:
                     status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
                 # Position status text at bottom, below scores and logos
-                status_y = self.matrix.image.height - 4  # Near bottom of 32px display
+                # Use larger font for better legibility
+                status_y = self.matrix.image.height - 6  # Slightly higher for larger font
                 try:
+                    # Try to use a slightly larger font (6 or 7 instead of 5)
                     tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
                     if os.path.exists(tiny_font_path):
-                        tiny_font = ImageFont.truetype(tiny_font_path, 5)
-                        bbox = self.matrix.draw.textbbox((0, 0), status_text, font=tiny_font)
+                        # Use size 6 for better legibility
+                        status_font = ImageFont.truetype(tiny_font_path, 6)
+                        bbox = self.matrix.draw.textbbox((0, 0), status_text, font=status_font)
                         text_width = bbox[2] - bbox[0]
                         status_x = (self.matrix.image.width - text_width) // 2
                         # Draw outline (black) at 8 positions around the text
                         outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
                         for offset_x, offset_y in outline_offsets:
                             self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text, 
-                                                 font=tiny_font, fill=(0, 0, 0))
+                                                 font=status_font, fill=(0, 0, 0))
                         # Draw main text in gray on top
-                        self.matrix.draw.text((status_x, status_y), status_text, font=tiny_font, fill=(200, 200, 200))
+                        self.matrix.draw.text((status_x, status_y), status_text, font=status_font, fill=(200, 200, 200))
                     else:
-                        # Use small font with outline
-                        status_font = self.matrix.small_font
-                        bbox = self.matrix.draw.textbbox((0, 0), status_text[:8], font=status_font)
+                        # Use regular font (not small) for better legibility
+                        status_font = self.matrix.font
+                        bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
                         text_width = bbox[2] - bbox[0]
                         status_x = (self.matrix.image.width - text_width) // 2
                         # Draw outline (black) at 8 positions around the text
                         outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
                         for offset_x, offset_y in outline_offsets:
-                            self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:8], 
+                            self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
                                                  font=status_font, fill=(0, 0, 0))
                         # Draw main text in gray on top
-                        self.matrix.draw.text((status_x, status_y), status_text[:8], font=status_font, fill=(200, 200, 200))
+                        self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
                 except Exception as e:
-                    logger.debug(f"Error using tiny font: {e}")
-                    # Fallback with outline
-                    status_font = self.matrix.small_font
-                    bbox = self.matrix.draw.textbbox((0, 0), status_text[:8], font=status_font)
+                    logger.debug(f"Error using font: {e}")
+                    # Fallback with regular font and outline
+                    status_font = self.matrix.font
+                    bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
                     text_width = bbox[2] - bbox[0]
                     status_x = (self.matrix.image.width - text_width) // 2
                     # Draw outline (black) at 8 positions around the text
                     outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
                     for offset_x, offset_y in outline_offsets:
-                        self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:8], 
+                        self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
                                              font=status_font, fill=(0, 0, 0))
                     # Draw main text in gray on top
-                    self.matrix.draw.text((status_x, status_y), status_text[:8], font=status_font, fill=(200, 200, 200))
+                    self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
             
             # Bottom: Down & Distance (for live games)
             down_distance = game.get('down_distance_text', '')
@@ -1434,6 +2235,84 @@ class DisplayController:
             self.matrix.draw_text("NOT CONFIG", y=20, color=(200, 200, 200), small=True, center=True)
             self.matrix.update()
         
+    def display_images(self):
+        """Display images/GIFs mode"""
+        self.matrix.clear()
+        
+        if self.current_image_list == "photos":
+            if not self.photo_list:
+                self.matrix.draw_text("NO PHOTOS", y=10, color=(255, 255, 0))
+                self.matrix.update()
+                return
+            
+            # Clamp index
+            if self.current_image_index >= len(self.photo_list):
+                self.current_image_index = 0
+            
+            photo_path = self.photo_list[self.current_image_index]
+            try:
+                img = Image.open(photo_path)
+                # Convert to RGB if needed
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                # Resize to fit display (64x32)
+                img = img.resize((self.matrix.width, self.matrix.height), Image.Resampling.LANCZOS)
+                self.matrix.image = img
+                self.matrix.draw = ImageDraw.Draw(self.matrix.image)
+                self.matrix.update()
+            except Exception as e:
+                logger.error(f"Error displaying photo {photo_path}: {e}")
+                self.matrix.draw_text("ERROR", y=10, color=(255, 0, 0))
+                self.matrix.update()
+        else:  # GIFs
+            if not self.gif_list:
+                self.matrix.draw_text("NO GIFS", y=10, color=(255, 255, 0))
+                self.matrix.update()
+                return
+            
+            # Clamp index
+            if self.current_image_index >= len(self.gif_list):
+                self.current_image_index = 0
+            
+            gif_path = self.gif_list[self.current_image_index]
+            try:
+                # Load GIF if not already loaded or if we switched GIFs
+                if self.current_gif_image is None or self.current_gif_image.filename != gif_path:
+                    self.current_gif_image = Image.open(gif_path)
+                    self.current_gif_frame = 0
+                
+                # Animate GIF (update every 100ms)
+                current_time = time.time()
+                if current_time - self.last_gif_update > 0.1:
+                    self.last_gif_update = current_time
+                    
+                    # Seek to current frame
+                    try:
+                        self.current_gif_image.seek(self.current_gif_frame)
+                    except EOFError:
+                        # Loop back to start
+                        self.current_gif_frame = 0
+                        self.current_gif_image.seek(0)
+                    
+                    # Convert to RGB if needed
+                    frame = self.current_gif_image.copy()
+                    if frame.mode != 'RGB':
+                        frame = frame.convert('RGB')
+                    
+                    # Resize to fit display
+                    frame = frame.resize((self.matrix.width, self.matrix.height), Image.Resampling.LANCZOS)
+                    self.matrix.image = frame
+                    self.matrix.draw = ImageDraw.Draw(self.matrix.image)
+                    
+                    # Move to next frame
+                    self.current_gif_frame += 1
+                
+                self.matrix.update()
+            except Exception as e:
+                logger.error(f"Error displaying GIF {gif_path}: {e}")
+                self.matrix.draw_text("ERROR", y=10, color=(255, 0, 0))
+                self.matrix.update()
+    
     def display_brightness(self):
         """Display brightness setting"""
         self.matrix.clear()
@@ -1453,14 +2332,19 @@ class DisplayController:
             if os.path.exists(self.reload_file):
                 try:
                     self.reload_config()
+                    # Also reload image lists when config is reloaded (in case images were uploaded)
+                    self._load_image_lists()
                     os.remove(self.reload_file)  # Remove reload trigger
-                    logger.info("Configuration reloaded from web interface")
+                    logger.info("Configuration and image lists reloaded from web interface")
                 except Exception as e:
                     logger.error(f"Error reloading config: {e}")
         
         if current_time - self.last_update < self.update_interval:
             return
         self.last_update = current_time
+        
+        # Update display for current mode
+        logger.debug(f"Updating display for mode: {self.current_mode}")
         
         try:
             if self.current_mode == "clock":
@@ -1473,35 +2357,52 @@ class DisplayController:
                 self.display_weather()
             elif self.current_mode == "music":
                 self.display_music()
+            elif self.current_mode == "images":
+                self.display_images()
             elif self.current_mode == "brightness":
                 self.display_brightness()
+            else:
+                logger.warning(f"Unknown mode: {self.current_mode}")
         except Exception as e:
             logger.error(f"Error updating display: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
             # Show error on display
             try:
-                self.matrix.clear()
-                self.matrix.draw_text("ERROR", y=10, color=(255, 0, 0))
-                self.matrix.update()
-            except:
-                pass
+                if self.matrix:
+                    self.matrix.clear()
+                    self.matrix.draw_text("ERROR", y=10, color=(255, 0, 0))
+                    self.matrix.update()
+            except Exception as display_err:
+                logger.error(f"Error showing error message on display: {display_err}")
             
     def run(self):
         """Main run loop"""
         logger.info("Display controller started")
         # Initial display update
         try:
+            logger.info("Performing initial display update...")
             self.update()
+            logger.info("Initial display update completed")
         except Exception as e:
             logger.error(f"Error in initial update: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
             
         try:
+            update_count = 0
             while True:
                 self.update()
+                update_count += 1
+                if update_count % 100 == 0:  # Log every 10 seconds (100 * 0.1s)
+                    logger.debug(f"Update loop running, count: {update_count}, mode: {self.current_mode}")
                 time.sleep(0.1)  # Small sleep to prevent CPU spinning
         except KeyboardInterrupt:
             logger.info("Display controller stopped")
         except Exception as e:
             logger.error(f"Error in run loop: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == "__main__":

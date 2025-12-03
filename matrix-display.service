@@ -5,7 +5,9 @@ Wants=bluetooth.target
 
 [Service]
 Type=simple
+# Run as user to access user-installed packages (like bleak)
 User=raspberrypi
+Group=raspberrypi
 WorkingDirectory=/home/raspberrypi/matrix-display
 # Update this path if using virtual environment: /home/raspberrypi/matrix-display/venv/bin/python3
 ExecStart=/usr/bin/python3 /home/raspberrypi/matrix-display/receiver.py
@@ -18,6 +20,10 @@ StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=HOME=/home/raspberrypi
 Environment=USER=raspberrypi
+
+# Allow access to GPIO and hardware (may need additional permissions)
+# If hardware access fails, you may need to add the user to specific groups:
+# sudo usermod -a -G gpio,spi,i2c raspberrypi
 
 # Note: To eliminate realtime priority warnings, run:
 #   python3_path=$(which python3)

@@ -9,6 +9,7 @@ import json
 import os
 import time
 from pathlib import Path
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 # Make config path absolute - try to use same directory as matrix_display_controller.py
@@ -40,6 +41,7 @@ def load_config():
         "timezone": "America/New_York",
         "clock_locations": [],
         "sports": [],
+        "favorite_teams": [],
         "stocks": [],
         "crypto": [],
         "weather_locations": [],
@@ -321,6 +323,31 @@ HTML_TEMPLATE = """
             <div class="item-list" id="weatherList"></div>
         </div>
         
+        <!-- Favorite Teams -->
+        <div class="section">
+            <h2>Favorite Sports Teams</h2>
+            <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
+                Add your favorite teams to see their games first in sports mode. Games involving your favorite teams will be shown in a separate "Favorites" section.
+            </p>
+            <div class="form-group">
+                <label>League/Sport:</label>
+                <select id="favoriteSport">
+                    <option value="nfl">NFL</option>
+                    <option value="nba">NBA</option>
+                    <option value="mlb">MLB</option>
+                    <option value="nhl">NHL</option>
+                    <option value="ncaaf">NCAAF</option>
+                    <option value="ncaam">NCAAM</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Team Name or Abbreviation:</label>
+                <input type="text" id="favoriteTeam" placeholder="e.g., LAL, Patriots, Yankees" style="text-transform: uppercase;">
+            </div>
+            <button onclick="addFavoriteTeam()">Add Favorite Team</button>
+            <div class="item-list" id="favoritesList"></div>
+        </div>
+        
         <!-- Music Configuration -->
         <div class="section">
             <h2>Music (Spotify/YouTube Music)</h2>
@@ -344,6 +371,39 @@ HTML_TEMPLATE = """
             <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
                 Note: Spotify credentials must be configured in <code>config/config_secrets.json</code>
             </p>
+        </div>
+        
+        <!-- Images/GIFs Upload -->
+        <div class="section">
+            <h2>Images & GIFs</h2>
+            <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
+                Upload photos (PNG, JPG, JPEG) or GIFs to display on the matrix. Use up/down gestures to switch between photos and GIFs, and left/right to navigate through the list.
+            </p>
+            
+            <div class="form-group">
+                <label>Upload Type:</label>
+                <select id="uploadType">
+                    <option value="photo">Photo (PNG, JPG, JPEG)</option>
+                    <option value="gif">GIF</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Select File:</label>
+                <input type="file" id="imageFile" accept=".png,.jpg,.jpeg,.gif">
+            </div>
+            
+            <button onclick="uploadImage()">Upload Image/GIF</button>
+            
+            <div style="margin-top: 20px;">
+                <h3>Uploaded Photos</h3>
+                <div class="item-list" id="photosList"></div>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <h3>Uploaded GIFs</h3>
+                <div class="item-list" id="gifsList"></div>
+            </div>
         </div>
         
         <div style="text-align: center; margin-top: 30px;">
@@ -382,6 +442,112 @@ HTML_TEMPLATE = """
                 }
             } catch (e) {
                 console.error('Error updating music enabled:', e);
+            }
+        }
+        
+        async function loadImageLists() {
+            try {
+                const response = await fetch('/api/images/list');
+                const data = await response.json();
+                
+                const photosList = document.getElementById('photosList');
+                const gifsList = document.getElementById('gifsList');
+                
+                if (photosList && data.photos) {
+                    photosList.innerHTML = data.photos.map((photo, idx) => `
+                        <div class="item">
+                            <div class="item-info">
+                                <strong>${photo}</strong>
+                            </div>
+                            <div class="item-actions">
+                                <button class="danger" onclick="deleteImage('photo', '${photo}')">Delete</button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+                if (gifsList && data.gifs) {
+                    gifsList.innerHTML = data.gifs.map((gif, idx) => `
+                        <div class="item">
+                            <div class="item-info">
+                                <strong>${gif}</strong>
+                            </div>
+                            <div class="item-actions">
+                                <button class="danger" onclick="deleteImage('gif', '${gif}')">Delete</button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error('Error loading image lists:', e);
+            }
+        }
+        
+        async function uploadImage() {
+            const fileInput = document.getElementById('imageFile');
+            const uploadType = document.getElementById('uploadType').value;
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showMessage('Please select a file', true);
+                return;
+            }
+            
+            // Validate file type
+            const fileExt = file.name.split('.').pop().toLowerCase();
+            if (uploadType === 'photo' && !['png', 'jpg', 'jpeg'].includes(fileExt)) {
+                showMessage('Photo must be PNG, JPG, or JPEG', true);
+                return;
+            }
+            if (uploadType === 'gif' && fileExt !== 'gif') {
+                showMessage('File must be a GIF', true);
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('type', uploadType);
+            
+            try {
+                const response = await fetch('/api/images/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showMessage(`File uploaded successfully: ${result.filename}`);
+                    fileInput.value = '';
+                    loadImageLists();
+                } else {
+                    showMessage(result.error || 'Upload failed', true);
+                }
+            } catch (e) {
+                showMessage('Error uploading file: ' + e.message, true);
+                console.error('Upload error:', e);
+            }
+        }
+        
+        async function deleteImage(type, filename) {
+            if (!confirm(`Delete ${filename}?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/images/delete/${type}/${encodeURIComponent(filename)}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showMessage(`Deleted ${filename}`);
+                    loadImageLists();
+                } else {
+                    showMessage(result.error || 'Delete failed', true);
+                }
+            } catch (e) {
+                showMessage('Error deleting file: ' + e.message, true);
+                console.error('Delete error:', e);
             }
         }
         
@@ -450,6 +616,24 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
             `).join('');
+            
+            // Favorite Teams
+            if (!config.favorite_teams) {
+                config.favorite_teams = [];
+            }
+            const favoritesList = document.getElementById('favoritesList');
+            if (favoritesList) {
+                favoritesList.innerHTML = config.favorite_teams.map((item, idx) => `
+                    <div class="item">
+                        <div class="item-info">
+                            <strong>${item.team}</strong> - ${item.sport.toUpperCase()}
+                        </div>
+                        <div class="item-actions">
+                            <button class="danger" onclick="removeItem('favorite_teams', ${idx})">Remove</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
             
             // Music configuration
             if (!config.music) {
@@ -544,6 +728,30 @@ HTML_TEMPLATE = """
             renderLists();
         }
         
+        function addFavoriteTeam() {
+            if (!config.favorite_teams) {
+                config.favorite_teams = [];
+            }
+            const sport = document.getElementById('favoriteSport').value.trim().toLowerCase();
+            const team = document.getElementById('favoriteTeam').value.trim().toUpperCase();
+            if (!sport || !team) {
+                showMessage('Please select a league and enter a team name/abbreviation', true);
+                return;
+            }
+            // Check for duplicates
+            const isDuplicate = config.favorite_teams.some(item => 
+                item.sport.toLowerCase() === sport.toLowerCase() && 
+                item.team.toUpperCase() === team.toUpperCase()
+            );
+            if (isDuplicate) {
+                showMessage('This team is already in your favorites', true);
+                return;
+            }
+            config.favorite_teams.push({ sport, team });
+            document.getElementById('favoriteTeam').value = '';
+            renderLists();
+        }
+        
         function removeItem(listName, index) {
             config[listName].splice(index, 1);
             renderLists();
@@ -590,6 +798,7 @@ HTML_TEMPLATE = """
         
         // Initialize
         renderLists();
+        loadImageLists();
     </script>
 </body>
 </html>
@@ -634,6 +843,126 @@ def save_config_api():
             return jsonify({"success": True})
         else:
             return jsonify({"success": False, "error": "Failed to save config"}), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/images/upload', methods=['POST'])
+def upload_image():
+    """Upload an image or GIF file"""
+    try:
+        print(f"Upload request received. Files: {list(request.files.keys())}")
+        print(f"Form data: {dict(request.form)}")
+        
+        if 'file' not in request.files:
+            print("ERROR: No 'file' in request.files")
+            return jsonify({"success": False, "error": "No file provided"}), 400
+        
+        file = request.files['file']
+        upload_type = request.form.get('type', 'photo')
+        
+        print(f"File: {file.filename}, Type: {upload_type}")
+        
+        if file.filename == '':
+            print("ERROR: Empty filename")
+            return jsonify({"success": False, "error": "No file selected"}), 400
+        
+        # Determine upload directory - use same logic as matrix_display_controller
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if upload_type == 'gif':
+            upload_dir = os.path.join(script_dir, "assets", "gif_list")
+        else:
+            upload_dir = os.path.join(script_dir, "assets", "photo_list")
+        
+        print(f"Upload directory: {upload_dir}")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(upload_dir, exist_ok=True)
+        print(f"Directory created/exists: {os.path.exists(upload_dir)}")
+        
+        # Secure filename and save
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(upload_dir, filename)
+        print(f"Saving to: {filepath}")
+        
+        file.save(filepath)
+        
+        # Verify file was saved
+        if not os.path.exists(filepath):
+            print(f"ERROR: File was not saved to {filepath}")
+            return jsonify({"success": False, "error": "File save failed"}), 500
+        
+        print(f"File saved successfully: {filepath}, size: {os.path.getsize(filepath)} bytes")
+        
+        # Trigger reload of image lists
+        reload_file = "/tmp/matrix_display_reload"
+        try:
+            with open(reload_file, 'w') as f:
+                f.write(str(time.time()))
+            os.chmod(reload_file, 0o666)
+        except Exception as reload_err:
+            print(f"Warning: Could not create reload file: {reload_err}")
+        
+        return jsonify({"success": True, "filename": filename})
+    except Exception as e:
+        print(f"ERROR in upload_image: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/images/list', methods=['GET'])
+def list_images():
+    """List all uploaded images and GIFs"""
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        photo_dir = os.path.join(script_dir, "assets", "photo_list")
+        gif_dir = os.path.join(script_dir, "assets", "gif_list")
+        
+        photos = []
+        gifs = []
+        
+        if os.path.exists(photo_dir):
+            for filename in sorted(os.listdir(photo_dir)):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    photos.append(filename)
+        
+        if os.path.exists(gif_dir):
+            for filename in sorted(os.listdir(gif_dir)):
+                if filename.lower().endswith('.gif'):
+                    gifs.append(filename)
+        
+        return jsonify({"photos": photos, "gifs": gifs})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/images/delete/<type>/<filename>', methods=['DELETE'])
+def delete_image(type, filename):
+    """Delete an image or GIF file"""
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if type == 'gif':
+            file_dir = os.path.join(script_dir, "assets", "gif_list")
+        else:
+            file_dir = os.path.join(script_dir, "assets", "photo_list")
+        
+        # Secure filename to prevent directory traversal
+        safe_filename = secure_filename(filename)
+        filepath = os.path.join(file_dir, safe_filename)
+        
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            
+            # Trigger reload of image lists
+            reload_file = "/tmp/matrix_display_reload"
+            with open(reload_file, 'w') as f:
+                f.write(str(time.time()))
+            os.chmod(reload_file, 0o666)
+            
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "File not found"}), 404
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

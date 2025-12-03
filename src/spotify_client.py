@@ -24,7 +24,7 @@ class SpotifyClient:
         self.client_id = None
         self.client_secret = None
         self.redirect_uri = None
-        self.scope = "user-read-currently-playing user-read-playback-state"
+        self.scope = "user-read-currently-playing user-read-playback-state user-modify-playback-state"
         self.sp = None
         self.load_credentials()
         if self.client_id and self.client_secret and self.redirect_uri:
@@ -93,6 +93,12 @@ class SpotifyClient:
         # ---- END DIAGNOSTIC BLOCK ----
 
         try:
+            # Check if cache file exists first
+            if not os.path.exists(SPOTIFY_AUTH_CACHE_PATH):
+                logging.warning(f"No Spotify token cache file found at {SPOTIFY_AUTH_CACHE_PATH}. Run authenticate_spotify.py if needed.")
+                self.sp = None
+                return
+            
             # Use the explicit cache path. Spotipy will try to load/refresh token from here.
             auth_manager = SpotifyOAuth(
                 client_id=self.client_id,
@@ -102,11 +108,33 @@ class SpotifyClient:
                 cache_path=SPOTIFY_AUTH_CACHE_PATH, # Use the defined cache path
                 open_browser=False
             )
+            
+            # Create Spotify client with the auth manager
+            # Spotipy will automatically load and refresh the token from cache if possible
             self.sp = spotipy.Spotify(auth_manager=auth_manager)
             
-            # Try making a lightweight call to verify if the token from cache is valid or can be refreshed.
-            self.sp.current_user() # This will raise an exception if token is invalid/expired and cannot be refreshed.
-            logging.info("Spotify client initialized and authenticated using cached token.")
+            # Try making a lightweight call to verify if the token is valid
+            # If this fails, we'll catch it and mark as not authenticated
+            try:
+                self.sp.current_user() # This will raise an exception if token is invalid/expired
+                logging.info("Spotify client initialized and authenticated using cached token.")
+            except (EOFError, KeyboardInterrupt, SystemExit):
+                # These errors occur when Spotipy tries to do interactive auth in a non-interactive environment
+                # The token might still be valid, so we'll keep the client but log a warning
+                logging.warning("Could not verify token interactively (running in service mode). Token may still be valid - will try to use it.")
+                # Don't set sp to None - let it try to use the token when actually needed
+            except spotipy.exceptions.SpotifyException as spotify_error:
+                # Spotify API error - token might be expired or invalid
+                if spotify_error.http_status in [401, 403]:
+                    logging.warning(f"Spotify authentication error (token may be expired): {spotify_error}. Run authenticate_spotify.py if needed.")
+                    self.sp = None
+                else:
+                    # Other API error - might be temporary, keep the client
+                    logging.warning(f"Spotify API error during verification: {spotify_error}. Will try to use token anyway.")
+            except Exception as verify_error:
+                # Other validation error - might be network or other issue
+                logging.warning(f"Token validation failed: {verify_error}. Will try to use token anyway.")
+                # Don't set sp to None - let it try to use the token when actually needed
         except Exception as e:
             logging.warning(f"Spotify client initialization/authentication failed: {e}. Run authenticate_spotify.py if needed.")
             self.sp = None # Ensure sp is None if auth fails
@@ -116,6 +144,43 @@ class SpotifyClient:
         return self.sp is not None # Relies on _authenticate setting sp to None on failure
 
     # Removed get_auth_url method - this is now handled by authenticate_spotify.py
+
+    def _try_refresh_token(self):
+        """Attempt to refresh the token using the refresh_token from cache."""
+        if not os.path.exists(SPOTIFY_AUTH_CACHE_PATH):
+            return False
+        
+        try:
+            # Load token from cache
+            with open(SPOTIFY_AUTH_CACHE_PATH, 'r') as f:
+                token_data = json.load(f)
+            
+            refresh_token = token_data.get('refresh_token')
+            if not refresh_token:
+                logging.debug("No refresh token available for automatic refresh")
+                return False
+            
+            # Create auth manager and refresh
+            auth_manager = SpotifyOAuth(
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+                redirect_uri=self.redirect_uri,
+                scope=self.scope,
+                cache_path=SPOTIFY_AUTH_CACHE_PATH,
+                open_browser=False
+            )
+            
+            # Refresh the token
+            new_token_info = auth_manager.refresh_access_token(refresh_token)
+            if new_token_info:
+                # Recreate the Spotify client with refreshed token
+                self.sp = spotipy.Spotify(auth_manager=auth_manager)
+                logging.info("Spotify token refreshed successfully using refresh_token")
+                return True
+        except Exception as e:
+            logging.debug(f"Could not refresh token automatically: {e}")
+        
+        return False
 
     def get_current_track(self):
         """Fetches the currently playing track from Spotify."""
@@ -130,16 +195,106 @@ class SpotifyClient:
                  return track_info
             else:
                  return None 
+        except (EOFError, KeyboardInterrupt, SystemExit) as e:
+            # Spotipy tried to do interactive auth - try to refresh token automatically
+            logging.debug(f"Spotify tried interactive auth (EOF), attempting automatic token refresh: {e}")
+            if self._try_refresh_token():
+                # Retry the API call after refresh
+                try:
+                    track_info = self.sp.current_playback()
+                    if track_info and track_info['item']:
+                        return track_info
+                except Exception as retry_error:
+                    logging.debug(f"Error after token refresh: {retry_error}")
+            else:
+                logging.debug("Token refresh failed. Token may be expired. Run authenticate_spotify.py to refresh.")
+            return None
         except spotipy.exceptions.SpotifyException as e:
             logging.error(f"Spotify API error when fetching current track: {e}")
-            # If it's an auth error (e.g. token revoked server-side), set sp to None so is_authenticated reflects it.
-            if e.http_status == 401 or e.http_status == 403: 
-                logging.warning("Spotify authentication error (token may be revoked or expired). Please re-run authenticate_spotify.py.")
-                self.sp = None # Mark as not authenticated
+            # If it's an auth error (e.g. token revoked server-side), try to refresh
+            if e.http_status == 401 or e.http_status == 403:
+                logging.debug("Spotify token expired (401/403), attempting automatic refresh")
+                if self._try_refresh_token():
+                    # Retry after refresh
+                    try:
+                        track_info = self.sp.current_playback()
+                        if track_info and track_info['item']:
+                            return track_info
+                    except Exception as retry_error:
+                        logging.debug(f"Error after token refresh: {retry_error}")
+                else:
+                    logging.warning("Spotify authentication error (token may be revoked or expired). Please re-run authenticate_spotify.py.")
+                    self.sp = None # Mark as not authenticated
             return None
         except Exception as e: # Catch other potential errors (network, etc.)
+            # Check if it's an EOF error that wasn't caught above
+            error_str = str(e)
+            if "EOF" in error_str or "reading a line" in error_str:
+                logging.debug(f"Spotify token refresh requires interactive auth: {e}. Attempting automatic refresh.")
+                if self._try_refresh_token():
+                    # Retry after refresh
+                    try:
+                        track_info = self.sp.current_playback()
+                        if track_info and track_info['item']:
+                            return track_info
+                    except Exception as retry_error:
+                        logging.debug(f"Error after token refresh: {retry_error}")
+                else:
+                    logging.debug("Token refresh failed. Run authenticate_spotify.py to refresh.")
+                return None
             logging.error(f"Unexpected error fetching current track from Spotify: {e}")
             return None
+    
+    def play_pause(self):
+        """Toggle play/pause on the current device"""
+        if not self.is_authenticated():
+            logging.warning("Spotify not authenticated. Cannot control playback.")
+            return False
+        
+        try:
+            # Get current playback state
+            playback = self.sp.current_playback()
+            if playback and playback.get('is_playing'):
+                # Currently playing, pause it
+                self.sp.pause_playback()
+                logging.info("Spotify playback paused")
+                return True
+            else:
+                # Currently paused, play it
+                self.sp.start_playback()
+                logging.info("Spotify playback started")
+                return True
+        except Exception as e:
+            logging.error(f"Error toggling Spotify playback: {e}")
+            return False
+    
+    def skip_next(self):
+        """Skip to next track"""
+        if not self.is_authenticated():
+            logging.warning("Spotify not authenticated. Cannot skip track.")
+            return False
+        
+        try:
+            self.sp.next_track()
+            logging.info("Spotify skipped to next track")
+            return True
+        except Exception as e:
+            logging.error(f"Error skipping to next track: {e}")
+            return False
+    
+    def skip_previous(self):
+        """Skip to previous track"""
+        if not self.is_authenticated():
+            logging.warning("Spotify not authenticated. Cannot skip track.")
+            return False
+        
+        try:
+            self.sp.previous_track()
+            logging.info("Spotify skipped to previous track")
+            return True
+        except Exception as e:
+            logging.error(f"Error skipping to previous track: {e}")
+            return False
 
 # Example Usage (for testing, adapt to new auth flow)
 # if __name__ == '__main__':

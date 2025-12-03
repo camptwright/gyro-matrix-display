@@ -25,7 +25,7 @@ NUS_TX = UUID("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
 DEVICE_HINTS = ["imu controller", "imu raw (ble uart)", "imu controller (ble uart)"]
 
 # Mode management
-MODES = ["clock", "sports", "stocks", "weather", "music", "brightness"]
+MODES = ["clock", "sports", "stocks", "weather", "music", "images", "brightness"]
 
 # Global display controller
 display_controller: DisplayController = None
@@ -92,11 +92,45 @@ def handle_weather_gesture(direction: str):
     elif direction == "right":
         display_controller.next_weather_location()
 
+def handle_images_gesture(direction: str, axis: str):
+    if axis == "pitch":  # up/down
+        display_controller.switch_image_list()
+    elif axis == "yaw":  # left/right
+        if direction == "left":
+            display_controller.prev_image()
+        elif direction == "right":
+            display_controller.next_image()
+
 def handle_brightness_gesture(direction: str):
     if direction == "left":
         display_controller.brightness_down()
     elif direction == "right":
         display_controller.brightness_up()
+
+def handle_music_gesture(direction: str, axis: str):
+    """Handle music mode gestures"""
+    if not display_controller or not display_controller.music_manager:
+        print("[MUSIC] Music manager not available")
+        return
+    
+    if axis == "pitch":  # up/down
+        if direction == "up":
+            # Play/pause
+            display_controller.music_manager.play_pause()
+            print("[MUSIC] Play/pause toggled")
+        elif direction == "down":
+            # Could be volume down or previous track - using previous track for now
+            display_controller.music_manager.skip_previous()
+            print("[MUSIC] Skipped to previous track")
+    elif axis == "yaw":  # left/right
+        if direction == "left":
+            # Skip back
+            display_controller.music_manager.skip_previous()
+            print("[MUSIC] Skipped to previous track")
+        elif direction == "right":
+            # Skip forward
+            display_controller.music_manager.skip_next()
+            print("[MUSIC] Skipped to next track")
 
 async def main():
     # Initialize display controller immediately (don't wait for BLE connection)
@@ -171,8 +205,9 @@ async def main():
                         if axis == "yaw":
                             handle_weather_gesture(direction)
                     elif current_mode == "music":
-                        # Music mode doesn't have gesture controls (yet)
-                        pass
+                        handle_music_gesture(direction, axis)
+                    elif current_mode == "images":
+                        handle_images_gesture(direction, axis)
                     elif current_mode == "brightness":
                         if axis == "yaw":
                             handle_brightness_gesture(direction)
@@ -216,8 +251,16 @@ async def main():
             print("Bluetooth not available. Retrying in 5 seconds...")
             await asyncio.sleep(5)
         except Exception as e:
-            print(f"Error scanning: {e}. Retrying in 5 seconds...")
-            await asyncio.sleep(5)
+            error_msg = str(e)
+            if 'bleak.backends.bluezdbus' in error_msg or 'No module named' in error_msg:
+                print("BLE backend not available. Controller connection disabled.")
+                print("The service runs as root, but bleak backend is not accessible.")
+                print("To fix: sudo pip3 install 'bleak[bluez]' --break-system-packages")
+                # Exit gracefully instead of retrying forever
+                return
+            else:
+                print(f"Error scanning: {e}. Retrying in 5 seconds...")
+                await asyncio.sleep(5)
     
     # Connect and subscribe (if device was found)
     if device:
@@ -328,3 +371,8 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nExiting...")
         sys.exit(0)
+    except Exception as e:
+        print(f"Fatal error in main: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
