@@ -824,17 +824,60 @@ def _convert_espn_stats_to_display_format(
         # Map ESPN NBA stats to display format
         if 'PTS' in stats or 'points' in stats:
             result['points'] = float(stats.get('PTS', stats.get('points', 0)) or 0)
-        # Field goals made/attempted
-        if 'FGM' in stats or 'fgm' in stats:
-            result['fg_made'] = int(stats.get('FGM', stats.get('fgm', 0)) or 0)
-        if 'FGA' in stats or 'fga' in stats:
-            result['fg_attempted'] = int(stats.get('FGA', stats.get('fga', 0)) or 0)
-        # Also check for FGM-A format
-        if 'FGM-A' in stats:
-            fgm_a_str = str(stats.get('FGM-A', '0-0')).split('-')
-            if len(fgm_a_str) >= 2:
-                result['fg_made'] = int(fgm_a_str[0]) if fgm_a_str[0].isdigit() else 0
-                result['fg_attempted'] = int(fgm_a_str[1]) if fgm_a_str[1].isdigit() else 0
+        
+        # Field goals made/attempted - check multiple formats
+        # ESPN returns "FG" as "9-13" format, also check for FGM/FGA separately and FGM-A format
+        fg_parsed = False
+        
+        # Check for "FG" field first (ESPN's primary format: "9-13")
+        # ESPN uses "FG" key with value like "9-13" (made-attempted)
+        if 'FG' in stats and 'fg_made' not in result:
+            fg_str = str(stats.get('FG', '0-0') or '0-0')
+            if '-' in fg_str:
+                fg_parts = fg_str.split('-')
+                if len(fg_parts) >= 2:
+                    try:
+                        result['fg_made'] = int(fg_parts[0].strip())
+                        result['fg_attempted'] = int(fg_parts[1].strip())
+                        fg_parsed = True
+                    except (ValueError, IndexError):
+                        pass
+            elif '/' in fg_str:
+                fg_parts = fg_str.split('/')
+                if len(fg_parts) >= 2:
+                    try:
+                        result['fg_made'] = int(fg_parts[0].strip())
+                        result['fg_attempted'] = int(fg_parts[1].strip())
+                        fg_parsed = True
+                    except (ValueError, IndexError):
+                        pass
+        
+        # Check for FGM-A format (alternative format)
+        if not fg_parsed and 'FGM-A' in stats:
+            fgm_a_str = str(stats.get('FGM-A', '0-0') or '0-0')
+            if '-' in fgm_a_str:
+                fgm_a_parts = fgm_a_str.split('-')
+                if len(fgm_a_parts) >= 2:
+                    try:
+                        result['fg_made'] = int(fgm_a_parts[0])
+                        result['fg_attempted'] = int(fgm_a_parts[1])
+                        fg_parsed = True
+                    except (ValueError, IndexError):
+                        pass
+        
+        # Check for separate FGM and FGA fields
+        if not fg_parsed:
+            if 'FGM' in stats or 'fgm' in stats:
+                try:
+                    result['fg_made'] = int(stats.get('FGM', stats.get('fgm', 0)) or 0)
+                except (ValueError, TypeError):
+                    pass
+            if 'FGA' in stats or 'fga' in stats:
+                try:
+                    result['fg_attempted'] = int(stats.get('FGA', stats.get('fga', 0)) or 0)
+                except (ValueError, TypeError):
+                    pass
+        
         if 'REB' in stats or 'rebounds' in stats:
             result['rebounds'] = float(stats.get('REB', stats.get('rebounds', 0)) or 0)
         if 'AST' in stats or 'assists' in stats:
@@ -859,20 +902,6 @@ def _convert_espn_stats_to_display_format(
                 result['fg_pct'] = float(fg_pct_str)
             except ValueError:
                 result['fg_pct'] = 0.0
-        if 'FGM' in stats or 'fgm' in stats or 'FGM-A' in stats:
-            # Field goals made/attempted might be in format "MADE-ATT" or separate
-            fgm_str = str(stats.get('FGM', stats.get('fgm', stats.get('FGM-A', '0-0'))) or '0-0')
-            if '-' in fgm_str:
-                fgm_parts = fgm_str.split('-')
-                result['fg_made'] = int(fgm_parts[0]) if len(fgm_parts) > 0 and fgm_parts[0].isdigit() else 0
-                result['fg_attempted'] = int(fgm_parts[1]) if len(fgm_parts) > 1 and fgm_parts[1].isdigit() else 0
-            elif '/' in fgm_str:
-                fgm_parts = fgm_str.split('/')
-                result['fg_made'] = int(fgm_parts[0]) if len(fgm_parts) > 0 and fgm_parts[0].isdigit() else 0
-                result['fg_attempted'] = int(fgm_parts[1]) if len(fgm_parts) > 1 and fgm_parts[1].isdigit() else 0
-        if 'FGA' in stats or 'fga' in stats:
-            if 'fg_attempted' not in result:
-                result['fg_attempted'] = int(stats.get('FGA', stats.get('fga', 0)) or 0)
     
     elif sport == 'nhl':
         # Map ESPN NHL stats to display format
