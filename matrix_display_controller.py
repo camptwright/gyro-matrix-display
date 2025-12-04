@@ -166,13 +166,16 @@ class MatrixDisplay:
             if os.path.exists(font_path):
                 self.font = ImageFont.truetype(font_path, 8)
                 self.small_font = ImageFont.truetype(font_path, 6)
+                self.tiny_font = ImageFont.truetype(font_path, 5)  # Even smaller for fantasy mode
             else:
                 self.font = ImageFont.load_default()
                 self.small_font = ImageFont.load_default()
+                self.tiny_font = ImageFont.load_default()
         except Exception as e:
             logger.warning(f"Could not load custom font: {e}")
             self.font = ImageFont.load_default()
             self.small_font = ImageFont.load_default()
+            self.tiny_font = ImageFont.load_default()
         
         # Display is ready - no test pattern needed
             
@@ -231,24 +234,55 @@ class MatrixDisplay:
             traceback.print_exc()
                 
     def draw_text(self, text: str, x: int = None, y: int = None, 
-                  color: tuple = (255, 255, 255), small: bool = False, center: bool = True):
-        """Draw text on the display"""
+                  color: tuple = (255, 255, 255), small: bool = False, center: bool = True, font=None, letter_spacing: int = 0):
+        """Draw text on the display with optional letter spacing reduction"""
         if not self.draw:
             return
-        font = self.small_font if small else self.font
-        if x is None or center:
-            bbox = self.draw.textbbox((0, 0), text, font=font)
-            text_width = bbox[2] - bbox[0]
-            if x is None:
-                # Center in full width
-                x = (self.image.width - text_width) // 2
-            else:
-                # Center within remaining space from x to end
-                remaining_width = self.image.width - x
-                x = x + (remaining_width - text_width) // 2
-        if y is None:
-            y = 0
-        self.draw.text((x, y), text, font=font, fill=color)
+        if font is None:
+            font = self.small_font if small else self.font
+        
+        # If letter spacing is specified (negative to reduce spacing), draw character by character
+        if letter_spacing < 0:
+            if x is None or center:
+                # Calculate total width with reduced spacing
+                total_width = 0
+                for char in text:
+                    bbox = self.draw.textbbox((0, 0), char, font=font)
+                    char_width = bbox[2] - bbox[0]
+                    total_width += char_width + letter_spacing
+                total_width -= letter_spacing  # Don't add spacing after last char
+                
+                if x is None:
+                    x = (self.image.width - total_width) // 2
+                else:
+                    remaining_width = self.image.width - x
+                    x = x + (remaining_width - total_width) // 2
+            
+            if y is None:
+                y = 0
+            
+            # Draw each character with reduced spacing
+            current_x = x
+            for char in text:
+                self.draw.text((current_x, y), char, font=font, fill=color)
+                bbox = self.draw.textbbox((0, 0), char, font=font)
+                char_width = bbox[2] - bbox[0]
+                current_x += char_width + letter_spacing
+        else:
+            # Normal drawing
+            if x is None or center:
+                bbox = self.draw.textbbox((0, 0), text, font=font)
+                text_width = bbox[2] - bbox[0]
+                if x is None:
+                    # Center in full width
+                    x = (self.image.width - text_width) // 2
+                else:
+                    # Center within remaining space from x to end
+                    remaining_width = self.image.width - x
+                    x = x + (remaining_width - text_width) // 2
+            if y is None:
+                y = 0
+            self.draw.text((x, y), text, font=font, fill=color)
         
     @property
     def width(self):
@@ -287,10 +321,10 @@ class DisplayController:
             logger.warning(f"Could not initialize asset loader: {e}")
             self.asset_loader = None
         
-        # Mode state
+        # Mode state - build modes list based on enabled flags
         self.current_mode = "clock"
         self.mode_index = 0
-        self.modes = ["clock", "sports", "stocks", "weather", "music", "images", "brightness"]
+        self._build_modes_list()
         
         # Clock state - handle timezone errors gracefully
         try:
@@ -317,13 +351,28 @@ class DisplayController:
         self.date_range_cache = {}  # Cache for date range game fetches (sport_id -> (games, timestamp))
         self.last_favorites_date_range_update = 0  # Track when we last fetched date ranges for favorites
         
-        # Stocks state - combine stocks and crypto into one list
+        # Stocks state - separate stocks and crypto lists with sub-mode switching
         self.stocks_list = self.config.get('stocks', [])
         self.crypto_list = self.config.get('crypto', [])
-        self.all_tickers = self.stocks_list + self.crypto_list
-        self.current_ticker = 0
+        self.stocks_submode = "stocks"  # "stocks" or "crypto"
+        self.current_stock_index = 0
+        self.current_crypto_index = 0
         self.stock_data_cache = {}  # Cache for stock prices
         self.last_stock_update = 0
+        
+        # Fantasy mode state
+        self.fantasy_players = self.config.get('fantasy_players', [])
+        self.current_fantasy_player = 0
+        self.fantasy_player_cache = {}  # Cache for player stats
+        self.last_fantasy_update = 0
+        # Group players by sport for cycling
+        self.fantasy_sports = ['nfl', 'nba', 'nhl']  # Supported sports
+        self.current_fantasy_sport_index = 0  # Current sport being displayed
+        # Initialize to first available sport
+        if self.fantasy_players:
+            first_player_sport = self.fantasy_players[0].get('sport', 'nfl').lower()
+            if first_player_sport in self.fantasy_sports:
+                self.current_fantasy_sport_index = self.fantasy_sports.index(first_player_sport)
         
         # Weather state
         self.weather_locations = self.config.get('weather_locations', [])
@@ -355,7 +404,7 @@ class DisplayController:
                     self.matrix = matrix
                 def clear(self):
                     self.matrix.clear()
-                def draw_text(self, text, x=None, y=None, color=(255, 255, 255), font=None, **kwargs):
+                def draw_text(self, text, x=None, y=None, color=(255, 255, 255), font=None, letter_spacing=0, **kwargs):
                     # Convert font parameter to small flag for MatrixDisplay
                     if font is None:
                         small = False
@@ -365,7 +414,7 @@ class DisplayController:
                                 (hasattr(self.matrix, 'small_font') and font == self.matrix.small_font))
                     # Extract center from kwargs if present, default True
                     center = kwargs.get('center', True)
-                    self.matrix.draw_text(text, x=x, y=y, color=color, small=small, center=center)
+                    self.matrix.draw_text(text, x=x, y=y, color=color, small=small, center=center, font=font, letter_spacing=letter_spacing)
                 def update_display(self):
                     self.matrix.update()
                 def get_text_width(self, text, font):
@@ -538,6 +587,7 @@ class DisplayController:
             "sports": [],
             "stocks": [],
             "crypto": [],
+            "fantasy_players": [],
             "weather_locations": [],
             "music": {
                 "enabled": False,
@@ -593,7 +643,19 @@ class DisplayController:
                 self.current_game = 0
             self.stocks_list = self.config.get('stocks', [])
             self.crypto_list = self.config.get('crypto', [])
-            self.all_tickers = self.stocks_list + self.crypto_list
+            # Reset indices if lists changed
+            if self.current_stock_index >= len(self.stocks_list):
+                self.current_stock_index = 0
+            if self.current_crypto_index >= len(self.crypto_list):
+                self.current_crypto_index = 0
+            self.fantasy_players = self.config.get('fantasy_players', [])
+            if self.current_fantasy_player >= len(self.fantasy_players):
+                self.current_fantasy_player = 0
+            # Reset to first available sport if needed
+            if self.fantasy_players:
+                first_player_sport = self.fantasy_players[0].get('sport', 'nfl').lower()
+                if first_player_sport in self.fantasy_sports:
+                    self.current_fantasy_sport_index = self.fantasy_sports.index(first_player_sport)
             self.weather_locations = self.config.get('weather_locations', [])
             # Reload image lists
             self._load_image_lists()
@@ -692,10 +754,64 @@ class DisplayController:
                 except Exception as e:
                     logger.error(f"Error updating music manager config: {e}")
             
-            logger.info(f"Configuration reloaded: sports={len(self.sports_list)}, stocks={len(self.stocks_list)}, crypto={len(self.crypto_list)}, weather={len(self.weather_locations)}, music_enabled={music_enabled}")
+            # Rebuild modes list based on enabled flags
+            old_modes = self.modes.copy()
+            self._build_modes_list()
+            
+            # If modes changed, adjust current mode if needed
+            if old_modes != self.modes:
+                if self.current_mode not in self.modes:
+                    # Current mode was disabled, switch to clock
+                    self.current_mode = "clock"
+                    self.mode_index = 0
+                    logger.info(f"Mode '{self.current_mode}' was disabled, switching to clock")
+                else:
+                    # Update mode_index to match new modes list
+                    self.mode_index = self.modes.index(self.current_mode)
+            
+            fantasy_enabled = self.config.get('fantasy_mode', {}).get('enabled', True)
+            stocks_enabled = self.config.get('stocks_mode', {}).get('enabled', True)
+            weather_enabled = self.config.get('weather_mode', {}).get('enabled', True)
+            
+            logger.info(f"Configuration reloaded: sports={len(self.sports_list)}, stocks={len(self.stocks_list)}, crypto={len(self.crypto_list)}, weather={len(self.weather_locations)}, fantasy_enabled={fantasy_enabled}, stocks_enabled={stocks_enabled}, weather_enabled={weather_enabled}, music_enabled={music_enabled}")
         except Exception as e:
             logger.error(f"Error reloading config: {e}")
             
+    def _build_modes_list(self):
+        """Build the modes list based on enabled flags in config"""
+        modes = ["clock", "sports"]  # Always enabled
+        
+        # Check fantasy mode
+        fantasy_config = self.config.get('fantasy_mode', {})
+        if fantasy_config.get('enabled', True):  # Default to enabled
+            modes.append("fantasy")
+        
+        # Check stocks mode
+        stocks_config = self.config.get('stocks_mode', {})
+        if stocks_config.get('enabled', True):  # Default to enabled
+            modes.append("stocks")
+        
+        # Check weather mode
+        weather_config = self.config.get('weather_mode', {})
+        if weather_config.get('enabled', True):  # Default to enabled
+            modes.append("weather")
+        
+        # Check music mode
+        music_config = self.config.get('music', {})
+        if music_config.get('enabled', False):
+            modes.append("music")
+        
+        # Always include images and brightness
+        modes.extend(["images", "brightness"])
+        
+        self.modes = modes
+        logger.info(f"Built modes list: {self.modes}")
+        
+        # Adjust mode_index if current mode is no longer in list
+        if self.current_mode not in self.modes:
+            self.current_mode = "clock"
+            self.mode_index = 0
+    
     def set_mode(self, mode: str):
         """Set the current display mode"""
         if mode in self.modes:
@@ -746,6 +862,11 @@ class DisplayController:
             sport = fav.get('sport', '').lower().strip()
             team_abbr = fav.get('team', '').upper().strip()
             if sport and team_abbr:
+                # Normalize sport names for consistency
+                if sport in ['ncaam', 'ncaab', 'mens-college-basketball', 'college-basketball']:
+                    sport = 'ncaam'  # Use ncaam as the canonical name
+                elif sport in ['ncaaf', 'college-football']:
+                    sport = 'ncaaf'  # Use ncaaf as the canonical name
                 if sport not in favorite_teams_by_sport:
                     favorite_teams_by_sport[sport] = set()
                 favorite_teams_by_sport[sport].add(team_abbr)
@@ -815,8 +936,9 @@ class DisplayController:
                         logger.info(f"Fetched {sport_id} games for previous day, today, next day ({len(all_games)} games)")
                     elif sport_id in ['ncaam', 'ncaab']:
                         # NCAAM: Previous 2 days, next 5 days (7 days)
-                        all_games = fetch_espn_scores_for_date_range(sport_id, days_back=2, days_forward=5)
-                        logger.info(f"Fetched {sport_id} games for previous 2 days, next 5 days ({len(all_games)} games)")
+                        # Use 'ncaam' as the canonical sport_id for fetching
+                        all_games = fetch_espn_scores_for_date_range('ncaam', days_back=2, days_forward=5)
+                        logger.info(f"Fetched ncaam games for previous 2 days, next 5 days ({len(all_games)} games)")
                     else:
                         # Default: 3 days back, 7 days forward
                         all_games = fetch_espn_scores_for_date_range(sport_id, days_back=3, days_forward=7)
@@ -1188,17 +1310,42 @@ class DisplayController:
             self.current_game = 0
         
     # Stocks mode controls
+    def switch_stocks_submode(self):
+        """Switch between stocks and crypto sub-modes"""
+        if self.stocks_submode == "stocks":
+            if self.crypto_list and len(self.crypto_list) > 0:
+                self.stocks_submode = "crypto"
+                logger.info("Switched to crypto sub-mode")
+            else:
+                logger.info("No crypto configured, staying in stocks")
+        else:
+            if self.stocks_list and len(self.stocks_list) > 0:
+                self.stocks_submode = "stocks"
+                logger.info("Switched to stocks sub-mode")
+            else:
+                logger.info("No stocks configured, staying in crypto")
+    
     def next_ticker(self):
-        """Next stock/crypto ticker"""
-        if self.all_tickers:
-            self.current_ticker = (self.current_ticker + 1) % len(self.all_tickers)
-            logger.info(f"Ticker: {self.current_ticker}")
+        """Next stock/crypto ticker in current sub-mode"""
+        if self.stocks_submode == "stocks":
+            if self.stocks_list:
+                self.current_stock_index = (self.current_stock_index + 1) % len(self.stocks_list)
+                logger.info(f"Stock: {self.current_stock_index}")
+        else:  # crypto
+            if self.crypto_list:
+                self.current_crypto_index = (self.current_crypto_index + 1) % len(self.crypto_list)
+                logger.info(f"Crypto: {self.current_crypto_index}")
             
     def prev_ticker(self):
-        """Previous stock/crypto ticker"""
-        if self.all_tickers:
-            self.current_ticker = (self.current_ticker - 1) % len(self.all_tickers)
-            logger.info(f"Ticker: {self.current_ticker}")
+        """Previous stock/crypto ticker in current sub-mode"""
+        if self.stocks_submode == "stocks":
+            if self.stocks_list:
+                self.current_stock_index = (self.current_stock_index - 1) % len(self.stocks_list)
+                logger.info(f"Stock: {self.current_stock_index}")
+        else:  # crypto
+            if self.crypto_list:
+                self.current_crypto_index = (self.current_crypto_index - 1) % len(self.crypto_list)
+                logger.info(f"Crypto: {self.current_crypto_index}")
             
     # Weather mode controls
     def next_weather_location(self):
@@ -2032,14 +2179,27 @@ class DisplayController:
         """Display stocks/crypto mode with actual prices"""
         self.matrix.clear()
         
-        logger.debug(f"display_stocks: all_tickers={self.all_tickers}, current_ticker={self.current_ticker}, len={len(self.all_tickers) if self.all_tickers else 0}")
-        if not self.all_tickers or self.current_ticker >= len(self.all_tickers):
-            logger.warning(f"No tickers configured or invalid index: all_tickers={self.all_tickers}, current_ticker={self.current_ticker}")
-            self.matrix.draw_text("NO TICKERS", y=10, color=(255, 0, 0))
-            self.matrix.update()
-            return
-            
-        ticker = self.all_tickers[self.current_ticker]
+        # Get current ticker based on sub-mode
+        if self.stocks_submode == "stocks":
+            ticker_list = self.stocks_list
+            current_index = self.current_stock_index
+            if not ticker_list or current_index >= len(ticker_list):
+                logger.warning(f"No stocks configured or invalid index")
+                self.matrix.draw_text("NO STOCKS", y=10, color=(255, 0, 0))
+                self.matrix.update()
+                return
+            ticker = ticker_list[current_index]
+        else:  # crypto
+            ticker_list = self.crypto_list
+            current_index = self.current_crypto_index
+            if not ticker_list or current_index >= len(ticker_list):
+                logger.warning(f"No crypto configured or invalid index")
+                self.matrix.draw_text("NO CRYPTO", y=10, color=(255, 0, 0))
+                self.matrix.update()
+                return
+            ticker = ticker_list[current_index]
+        
+        logger.debug(f"display_stocks: submode={self.stocks_submode}, ticker={ticker}, index={current_index}")
         
         # Fetch price if cache is old (update every 30 seconds)
         current_time = time.time()
@@ -2086,25 +2246,463 @@ class DisplayController:
                 except:
                     pass
             
-            # Line 1: Ticker - center aligned
-            self.matrix.draw_text(ticker[:6], y=2, color=(0, 255, 0), small=True, center=True)
-            # Line 2: Price - offset to right to avoid icon overlap
+            # Line 1: Sub-mode label and ticker
+            mode_label = "STOCK" if self.stocks_submode == "stocks" else "CRYPTO"
+            self.matrix.draw_text(mode_label, y=2, color=(100, 100, 255), small=True, center=True)
+            # Line 2: Ticker
+            self.matrix.draw_text(ticker[:6], y=9, color=(0, 255, 0), small=True, center=True)
+            # Line 3: Price - offset to right to avoid icon overlap
             price_str = f"${price:.2f}" if price < 1000 else f"${price:.0f}"
             # Offset x position if icon is present (icon is 20px wide)
             x_offset = 22 if icon else None
-            self.matrix.draw_text(price_str, x=x_offset, y=14, color=(255, 255, 255), small=True, center=(icon is None))
-            # Line 3: Change percentage - center aligned
+            self.matrix.draw_text(price_str, x=x_offset, y=16, color=(255, 255, 255), small=True, center=(icon is None))
+            # Line 4: Change percentage - center aligned
             if change >= 0:
                 change_color = (0, 255, 0)  # Green
                 change_str = f"+{change_pct:.1f}%"
             else:
                 change_color = (255, 0, 0)  # Red
                 change_str = f"{change_pct:.1f}%"
-            self.matrix.draw_text(change_str, y=22, color=change_color, small=True, center=True)
+            self.matrix.draw_text(change_str, y=24, color=change_color, small=True, center=True)
         else:
             # No data available, just show ticker
             self.matrix.draw_text(ticker[:8], y=10, color=(0, 255, 0))
             
+        self.matrix.update()
+    
+    def next_fantasy_player(self):
+        """Next fantasy player in current sport"""
+        current_sport = self.fantasy_sports[self.current_fantasy_sport_index]
+        players_in_sport = [i for i, p in enumerate(self.fantasy_players) 
+                           if p.get('sport', 'nfl').lower() == current_sport]
+        if players_in_sport:
+            current_idx = players_in_sport.index(self.current_fantasy_player) if self.current_fantasy_player in players_in_sport else 0
+            next_idx = (current_idx + 1) % len(players_in_sport)
+            self.current_fantasy_player = players_in_sport[next_idx]
+            logger.info(f"Fantasy player: {self.current_fantasy_player} (sport: {current_sport})")
+            self.matrix.clear()
+            self.display_fantasy()
+    
+    def prev_fantasy_player(self):
+        """Previous fantasy player in current sport"""
+        current_sport = self.fantasy_sports[self.current_fantasy_sport_index]
+        players_in_sport = [i for i, p in enumerate(self.fantasy_players) 
+                           if p.get('sport', 'nfl').lower() == current_sport]
+        if players_in_sport:
+            current_idx = players_in_sport.index(self.current_fantasy_player) if self.current_fantasy_player in players_in_sport else 0
+            prev_idx = (current_idx - 1) % len(players_in_sport)
+            self.current_fantasy_player = players_in_sport[prev_idx]
+            logger.info(f"Fantasy player: {self.current_fantasy_player} (sport: {current_sport})")
+            self.matrix.clear()
+            self.display_fantasy()
+    
+    def next_fantasy_sport(self):
+        """Cycle to next sport"""
+        self.current_fantasy_sport_index = (self.current_fantasy_sport_index + 1) % len(self.fantasy_sports)
+        current_sport = self.fantasy_sports[self.current_fantasy_sport_index]
+        # Find first player in this sport
+        players_in_sport = [i for i, p in enumerate(self.fantasy_players) 
+                           if p.get('sport', 'nfl').lower() == current_sport]
+        if players_in_sport:
+            self.current_fantasy_player = players_in_sport[0]
+        logger.info(f"Fantasy sport: {current_sport}")
+        self.matrix.clear()
+        self.display_fantasy()
+    
+    def prev_fantasy_sport(self):
+        """Cycle to previous sport"""
+        self.current_fantasy_sport_index = (self.current_fantasy_sport_index - 1) % len(self.fantasy_sports)
+        current_sport = self.fantasy_sports[self.current_fantasy_sport_index]
+        # Find first player in this sport
+        players_in_sport = [i for i, p in enumerate(self.fantasy_players) 
+                           if p.get('sport', 'nfl').lower() == current_sport]
+        if players_in_sport:
+            self.current_fantasy_player = players_in_sport[0]
+        logger.info(f"Fantasy sport: {current_sport}")
+        self.matrix.clear()
+        self.display_fantasy()
+    
+    def _truncate_text_to_fit(self, text: str, font, max_width: int, letter_spacing: int = 0) -> str:
+        """Truncate text to fit within max_width pixels, accounting for letter spacing"""
+        if not self.matrix.draw:
+            # Fallback: character-based truncation
+            return text[:max_width] if len(text) > max_width else text
+        
+        # Calculate text width with letter spacing
+        def get_text_width(txt):
+            if letter_spacing < 0:
+                width = 0
+                for char in txt:
+                    bbox = self.matrix.draw.textbbox((0, 0), char, font=font)
+                    char_width = bbox[2] - bbox[0]
+                    width += char_width + letter_spacing
+                width -= letter_spacing  # Don't add spacing after last char
+                return width
+            else:
+                bbox = self.matrix.draw.textbbox((0, 0), txt, font=font)
+                return bbox[2] - bbox[0]
+        
+        if get_text_width(text) <= max_width:
+            return text
+        
+        # Truncate from the end, keeping the team abbreviation
+        # Try to preserve "(TEAM)" if present
+        if '(' in text and ')' in text:
+            # Extract team part
+            paren_start = text.rfind('(')
+            team_part = text[paren_start:]
+            name_part = text[:paren_start]
+            
+            # Truncate name part character by character
+            truncated_name = name_part
+            while len(truncated_name) > 1:
+                test_text = truncated_name + team_part
+                test_width = get_text_width(test_text)
+                
+                if test_width <= max_width:
+                    return test_text
+                truncated_name = truncated_name[:-1]
+            
+            # If even single char doesn't fit, return team part only
+            return team_part
+        else:
+            # No team part, just truncate
+            truncated = text
+            while len(truncated) > 1:
+                if get_text_width(truncated) <= max_width:
+                    return truncated
+                truncated = truncated[:-1]
+            return truncated
+    
+    def _truncate_text(self, text: str, max_width: int = None, small: bool = True) -> str:
+        """Truncate text to fit within max_width pixels (defaults to display width)"""
+        if not self.matrix.draw:
+            # Fallback: character-based truncation
+            if max_width is None:
+                max_width = self.matrix.width
+            return text[:max_width] if len(text) > max_width else text
+        
+        font = self.matrix.small_font if small else self.matrix.font
+        
+        # Use display width - since text is centered, we can use the full width
+        # The draw_text function centers the text, so slight overflow is acceptable
+        if max_width is None:
+            max_width = self.matrix.width  # Use full width (64px for standard display)
+        
+        # Check if text fits (with small tolerance for centering)
+        bbox = self.matrix.draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        
+        # Only truncate if text is significantly wider than display (allow 5px overflow for centering)
+        if text_width <= max_width + 5:
+            return text
+        
+        # Simple linear search from end to find longest fit
+        # This is more reliable than binary search for variable-width fonts
+        for i in range(len(text), 0, -1):
+            test_text = text[:i] + "..."
+            bbox = self.matrix.draw.textbbox((0, 0), test_text, font=font)
+            test_width = bbox[2] - bbox[0]
+            
+            if test_width <= max_width:
+                return test_text
+        
+        # If even "..." doesn't fit, return it anyway
+        return "..."
+    
+    def _calculate_fantasy_score(self, data: Dict[str, Any], sport: str) -> float:
+        """Calculate fantasy score based on sport-specific rules"""
+        score = 0.0
+        sport = sport.lower()
+        
+        if sport == 'nfl':
+            # Passing stats
+            pass_yds = float(data.get('passing_yards', 0) or 0)
+            pass_tds = int(data.get('passing_tds', 0) or 0)
+            interceptions = int(data.get('passing_ints', 0) or 0)
+            score += pass_yds * 0.04
+            score += pass_tds * 4
+            score += interceptions * -1
+            
+            # Rushing stats
+            rush_yds = float(data.get('rushing_yards', 0) or 0)
+            rush_tds = int(data.get('rushing_tds', 0) or 0)
+            score += rush_yds * 0.1
+            score += rush_tds * 6
+            
+            # Receiving stats
+            receptions = int(data.get('receptions', 0) or 0)
+            rec_yds = float(data.get('receiving_yards', 0) or 0)
+            rec_tds = int(data.get('receiving_tds', 0) or 0)
+            score += receptions * 1
+            score += rec_yds * 0.1
+            score += rec_tds * 6
+            
+            # Other stats (if available)
+            fumbles_lost = int(data.get('fumbles_lost', 0) or 0)
+            score += fumbles_lost * -1
+            
+        elif sport == 'nba':
+            points = float(data.get('points', 0) or 0)
+            rebounds = float(data.get('rebounds', 0) or 0)
+            assists = float(data.get('assists', 0) or 0)
+            blocks = float(data.get('blocks', 0) or 0)
+            steals = float(data.get('steals', 0) or 0)
+            turnovers = float(data.get('turnovers', 0) or 0)
+            
+            score += points * 1
+            score += rebounds * 1.2
+            score += assists * 1.5
+            score += blocks * 3
+            score += steals * 3
+            score += turnovers * -1
+            
+        elif sport == 'nhl':
+            # Skater stats
+            goals = int(data.get('goals', 0) or 0)
+            assists = int(data.get('assists', 0) or 0)
+            shots = int(data.get('shots', 0) or 0)
+            plus_minus = int(data.get('plus_minus', 0) or 0)
+            blocks = int(data.get('blocks', 0) or 0)
+            
+            score += goals * 3
+            score += assists * 2
+            score += shots * 0.5
+            score += plus_minus * 1
+            score += blocks * 0.5
+            
+            # Goalie stats (if available)
+            wins = int(data.get('wins', 0) or 0)
+            goals_against = int(data.get('goals_against', 0) or 0)
+            saves = int(data.get('saves', 0) or 0)
+            shutouts = int(data.get('shutouts', 0) or 0)
+            
+            if wins > 0 or saves > 0:  # Likely a goalie
+                score = wins * 3
+                score += goals_against * -1
+                score += saves * 0.2
+                score += shutouts * 2
+        
+        return round(score, 2)
+    
+    def display_fantasy(self):
+        """Display fantasy mode with player stats"""
+        self.matrix.clear()
+        
+        # Get current sport
+        current_sport = self.fantasy_sports[self.current_fantasy_sport_index]
+        
+        # Filter players for current sport
+        players_in_sport = [p for p in self.fantasy_players 
+                           if p.get('sport', 'nfl').lower() == current_sport]
+        
+        if not players_in_sport:
+            # No players for this sport, show sport name
+            self.matrix.draw_text(f"NO {current_sport.upper()}", y=10, color=(255, 0, 0), small=True, center=True)
+            self.matrix.draw_text("PLAYERS", y=18, color=(255, 0, 0), small=True, center=True)
+            self.matrix.update()
+            return
+        
+        # Find current player index in filtered list
+        if self.current_fantasy_player >= len(self.fantasy_players):
+            self.current_fantasy_player = 0
+        
+        player_config = self.fantasy_players[self.current_fantasy_player]
+        player_sport = player_config.get('sport', 'nfl').lower()
+        
+        # If current player is not in current sport, switch to first player in sport
+        if player_sport != current_sport:
+            self.current_fantasy_player = next((i for i, p in enumerate(self.fantasy_players) 
+                                              if p.get('sport', 'nfl').lower() == current_sport), 0)
+            player_config = self.fantasy_players[self.current_fantasy_player]
+        
+        player_name = player_config.get('name', '')
+        team_abbr = player_config.get('team', '')
+        sport = player_config.get('sport', 'nfl').lower()
+        
+        if not player_name:
+            self.matrix.draw_text("NO NAME", y=10, color=(255, 0, 0))
+            self.matrix.update()
+            return
+        
+        # Fetch player stats if cache is old (update every 60 seconds)
+        current_time = time.time()
+        cache_key = f"{sport}_{player_name}_{team_abbr}"
+        
+        if (cache_key not in self.fantasy_player_cache or 
+            current_time - self.last_fantasy_update > 60):
+            try:
+                from player_stats_fetcher import fetch_player_stats
+                logger.info(f"Fetching {sport.upper()} stats for {player_name} ({team_abbr})")
+                data = fetch_player_stats(player_name, team_abbr, sport)
+                if data:
+                    self.fantasy_player_cache[cache_key] = data
+                    self.last_fantasy_update = current_time
+                    logger.info(f"Successfully fetched stats for {player_name}: {data}")
+                else:
+                    logger.warning(f"No stats found for {player_name} ({team_abbr})")
+            except Exception as e:
+                logger.error(f"Error fetching player stats: {e}", exc_info=True)
+                data = None
+        else:
+            data = self.fantasy_player_cache.get(cache_key)
+            logger.debug(f"Using cached stats for {player_name}")
+        
+        if data:
+            # Abbreviate player name more aggressively for long names
+            name_parts = player_name.split()
+            if len(name_parts) >= 2:
+                # Use first initial and last name, no space: "J.Robertson"
+                abbreviated_name = f"{name_parts[0][0]}.{name_parts[-1]}"
+            else:
+                abbreviated_name = player_name
+            
+            # Get team abbreviation for display
+            team_display = data.get('team', team_abbr) or team_abbr
+            
+            # Check if player is a kicker (has FG stats but no passing/rushing/receiving)
+            is_kicker = (data.get('fg_made') is not None or data.get('fg_attempted') is not None) and \
+                       data.get('passing_yards') is None and \
+                       data.get('rushing_yards') is None and \
+                       data.get('receiving_yards') is None
+            
+            # Line 1: Name (TEAM) - exactly 6 lines total
+            # Make name compact: "J.Robertson(DAL)" format
+            name_display = f"{abbreviated_name}({team_display})"
+            
+            # Truncate name if it's too long to fit on display
+            tiny_font = getattr(self.matrix, 'tiny_font', None) or getattr(self, 'tiny_font', None)
+            name_font = tiny_font if tiny_font else (getattr(self.matrix, 'small_font', None) or self.matrix.font)
+            
+            # Check if name fits, truncate last name if needed
+            max_display_width = self.matrix.width - 4  # Leave 2px margin on each side for safety
+            name_display = self._truncate_text_to_fit(name_display, name_font, max_display_width, letter_spacing=-1)
+            
+            # Build stats lines according to compact 6-line format
+            stats_lines = []
+            
+            if sport == 'nfl':
+                if is_kicker:
+                    # NFL Kicker - 6 lines: Name, FGM/A, LNG, PAT, MISS, FPTS
+                    fg_made = int(data.get('fg_made', 0) or 0)
+                    fg_att = int(data.get('fg_attempted', 0) or 0)
+                    fg_long = int(data.get('fg_long', 0) or 0)
+                    xp_made = int(data.get('xp_made', 0) or 0)
+                    xp_att = int(data.get('xp_attempted', 0) or 0)
+                    # MISS = total misses (FG misses + XP misses)
+                    fg_misses = fg_att - fg_made
+                    xp_misses = xp_att - xp_made
+                    total_misses = fg_misses + xp_misses
+                    
+                    stats_lines.append(f"FGM/A:{fg_made}/{fg_att}")
+                    stats_lines.append(f"LNG:{fg_long}")
+                    stats_lines.append(f"PAT:{xp_made}/{xp_att}")
+                    stats_lines.append(f"MISS:{total_misses}")
+                else:
+                    # NFL QB/RB/WR/TE - 6 lines: Name, C/A PY, RA RY, RT RY, TTD FUM, FPTS
+                    comp = int(data.get('passing_completions', 0) or 0)
+                    att = int(data.get('passing_attempts', 0) or 0)
+                    pass_yds = int(data.get('passing_yards', 0) or 0)
+                    rush_att = int(data.get('rushing_attempts', 0) or 0)
+                    rush_yds = int(data.get('rushing_yards', 0) or 0)
+                    rec = int(data.get('receptions', 0) or 0)
+                    targets = int(data.get('targets', 0) or 0)
+                    rec_yds = int(data.get('receiving_yards', 0) or 0)
+                    # Total touchdowns
+                    pass_tds = int(data.get('passing_tds', 0) or 0)
+                    rush_tds = int(data.get('rushing_tds', 0) or 0)
+                    rec_tds = int(data.get('receiving_tds', 0) or 0)
+                    total_tds = pass_tds + rush_tds + rec_tds
+                    fumbles = int(data.get('fumbles', 0) or 0)
+                    pass_ints = int(data.get('passing_ints', 0) or 0)
+                    # Use INT for QBs, FUM for others
+                    turnovers = pass_ints if pass_ints > 0 else fumbles
+                    
+                    stats_lines.append(f"C/A:{comp}/{att} PY:{pass_yds}")
+                    stats_lines.append(f"RA:{rush_att} RY:{rush_yds}")
+                    stats_lines.append(f"RT:{rec}/{targets} RY:{rec_yds}")
+                    stats_lines.append(f"TTD:{total_tds} FUM:{turnovers}")
+                    
+            elif sport == 'nba':
+                # NBA - 6 lines: Name, FG PTS, REB AST, STL BLK, TO PF, FPTS
+                fg_made = int(data.get('fg_made', 0) or 0)
+                fg_att = int(data.get('fg_attempted', 0) or 0)
+                pts = int(data.get('points', 0) or 0)
+                reb = int(data.get('rebounds', 0) or 0)
+                ast = int(data.get('assists', 0) or 0)
+                stl = int(data.get('steals', 0) or 0)
+                blk = int(data.get('blocks', 0) or 0)
+                to = int(data.get('turnovers', 0) or 0)
+                pf = int(data.get('personal_fouls', 0) or 0)
+                
+                stats_lines.append(f"FG:{fg_made}/{fg_att} P:{pts}")
+                stats_lines.append(f"REB:{reb} AST:{ast}")
+                stats_lines.append(f"STL:{stl} BLK:{blk}")
+                stats_lines.append(f"TO:{to} PF:{pf}")
+                
+            elif sport == 'nhl':
+                # NHL - 6 lines: Name, G/A SOG, HIT BLK, PIM +/-, TOI, FPTS
+                goals = int(data.get('goals', 0) or 0)
+                assists = int(data.get('assists', 0) or 0)
+                shots = int(data.get('shots', 0) or 0)
+                hits = int(data.get('hits', 0) or 0)
+                blk = int(data.get('blocks', 0) or 0)
+                pim = int(data.get('penalty_minutes', 0) or 0)
+                pm = int(data.get('plus_minus', 0) or 0)
+                toi = data.get('time_on_ice', '0:00') or '0:00'
+                # Format TOI to MM:SS if needed
+                if isinstance(toi, str) and ':' in toi:
+                    toi_parts = toi.split(':')
+                    if len(toi_parts) >= 2:
+                        toi_display = f"{toi_parts[0]}:{toi_parts[1][:2]}"
+                    else:
+                        toi_display = toi
+                else:
+                    toi_display = str(toi)
+                
+                stats_lines.append(f"G/A:{goals}/{assists} SOG:{shots}")
+                stats_lines.append(f"HIT:{hits} BLK:{blk}")
+                stats_lines.append(f"PIM:{pim} +/-:{pm}")
+                stats_lines.append(f"TOI:{toi_display}")
+            
+            # Calculate fantasy score
+            fantasy_score = self._calculate_fantasy_score(data, sport)
+            stats_lines.append(f"FPTS:{fantasy_score:.1f}")
+            
+            # Display exactly 6 lines: Name + 5 stat lines
+            # Use tiny font with reduced letter spacing for compact display
+            tiny_font = getattr(self.matrix, 'tiny_font', None) or getattr(self, 'tiny_font', None)
+            fantasy_font = tiny_font if tiny_font else (getattr(self.matrix, 'small_font', None) or self.matrix.font)
+            
+            # Fixed 6-line layout with 5px line height
+            line_height = 5
+            y_offset = 0
+            
+            # Line 0: Name (TEAM) - already truncated above
+            self.matrix.draw_text(name_display, y=y_offset, color=(255, 255, 0), 
+                                 font=name_font, center=True, letter_spacing=-1)
+            
+            # Lines 1-5: Stats (exactly 5 stat lines)
+            if stats_lines:
+                for i, stat_line in enumerate(stats_lines[:5]):
+                    self.matrix.draw_text(stat_line, y=y_offset + (i + 1) * line_height, 
+                                         color=(0, 255, 0), font=fantasy_font, center=True, letter_spacing=-1)
+            else:
+                # Stats found but no stat values - show message
+                self.matrix.draw_text("NO STATS", y=y_offset + line_height, 
+                                     color=(255, 165, 0), font=fantasy_font, center=True, letter_spacing=-1)
+        else:
+            # No stats available - show player info with helpful message
+            name_parts = player_name.split()
+            if len(name_parts) >= 2:
+                abbreviated_name = f"{name_parts[0][0]}. {name_parts[-1]}"
+            else:
+                abbreviated_name = player_name
+            # Use larger font when no stats to fill screen
+            small_font = getattr(self.matrix, 'small_font', None) or self.matrix.font
+            self.matrix.draw_text(abbreviated_name, y=0, color=(255, 255, 0), font=small_font, center=True, letter_spacing=-1)
+            self.matrix.draw_text("NO STATS", y=6, color=(255, 0, 0), font=small_font, center=True, letter_spacing=-1)
+        
         self.matrix.update()
             
     def display_weather(self):
@@ -2351,6 +2949,8 @@ class DisplayController:
                 self.display_clock()
             elif self.current_mode == "sports":
                 self.display_sports()
+            elif self.current_mode == "fantasy":
+                self.display_fantasy()
             elif self.current_mode == "stocks":
                 self.display_stocks()
             elif self.current_mode == "weather":

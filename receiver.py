@@ -25,7 +25,7 @@ NUS_TX = UUID("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
 DEVICE_HINTS = ["imu controller", "imu raw (ble uart)", "imu controller (ble uart)"]
 
 # Mode management
-MODES = ["clock", "sports", "stocks", "weather", "music", "images", "brightness"]
+MODES = ["clock", "sports", "fantasy", "stocks", "weather", "music", "images", "brightness"]
 
 # Global display controller
 display_controller: DisplayController = None
@@ -80,11 +80,31 @@ def handle_sports_gesture(direction: str, axis: str):
     else:
         print(f"[SPORTS HANDLER] Unknown axis: {axis}")
 
-def handle_stocks_gesture(direction: str):
-    if direction == "left":
-        display_controller.prev_ticker()
-    elif direction == "right":
-        display_controller.next_ticker()
+def handle_stocks_gesture(direction: str, axis: str):
+    if axis == "pitch":  # up/down - switch between stocks and crypto
+        if direction == "up" or direction == "down":
+            display_controller.switch_stocks_submode()
+    elif axis == "yaw":  # left/right - navigate tickers
+        if direction == "left":
+            display_controller.prev_ticker()
+        elif direction == "right":
+            display_controller.next_ticker()
+
+def handle_fantasy_gesture(direction: str, axis: str):
+    if axis == "yaw":  # left/right - navigate players within current sport
+        if direction == "left":
+            display_controller.prev_fantasy_player()
+            print("[FANTASY] Previous player")
+        elif direction == "right":
+            display_controller.next_fantasy_player()
+            print("[FANTASY] Next player")
+    elif axis == "pitch":  # up/down - cycle through sports
+        if direction == "up":
+            display_controller.next_fantasy_sport()
+            print("[FANTASY] Next sport")
+        elif direction == "down":
+            display_controller.prev_fantasy_sport()
+            print("[FANTASY] Previous sport")
 
 def handle_weather_gesture(direction: str):
     if direction == "left":
@@ -198,9 +218,10 @@ async def main():
                     elif current_mode == "sports":
                         print(f"[SPORTS] Handling {axis} {direction} gesture")
                         handle_sports_gesture(direction, axis)
+                    elif current_mode == "fantasy":
+                        handle_fantasy_gesture(direction, axis)
                     elif current_mode == "stocks":
-                        if axis == "yaw":
-                            handle_stocks_gesture(direction)
+                        handle_stocks_gesture(direction, axis)
                     elif current_mode == "weather":
                         if axis == "yaw":
                             handle_weather_gesture(direction)

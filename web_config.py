@@ -44,7 +44,17 @@ def load_config():
         "favorite_teams": [],
         "stocks": [],
         "crypto": [],
+        "fantasy_players": [],
         "weather_locations": [],
+        "fantasy_mode": {
+            "enabled": True
+        },
+        "stocks_mode": {
+            "enabled": True
+        },
+        "weather_mode": {
+            "enabled": True
+        },
         "music": {
             "enabled": False,
             "preferred_source": "spotify",
@@ -83,7 +93,7 @@ def save_config(config):
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
         print(f"Config saved to: {CONFIG_FILE}")
-        print(f"Config contents: sports={len(config.get('sports', []))}, stocks={len(config.get('stocks', []))}, crypto={len(config.get('crypto', []))}, weather={len(config.get('weather_locations', []))}")
+        print(f"Config contents: sports={len(config.get('sports', []))}, stocks={len(config.get('stocks', []))}, crypto={len(config.get('crypto', []))}, fantasy_players={len(config.get('fantasy_players', []))}, weather={len(config.get('weather_locations', []))}")
         return True
     except Exception as e:
         print(f"Error saving config: {e}")
@@ -278,51 +288,6 @@ HTML_TEMPLATE = """
             <div class="item-list" id="sportsList"></div>
         </div>
         
-        <!-- Stocks -->
-        <div class="section">
-            <h2>Stocks</h2>
-            <div class="form-group">
-                <label>Stock Ticker:</label>
-                <input type="text" id="stockTicker" placeholder="e.g., AAPL, MSFT, GOOGL" style="text-transform: uppercase;">
-            </div>
-            <button onclick="addStock()">Add Stock</button>
-            <div class="item-list" id="stocksList"></div>
-        </div>
-        
-        <!-- Crypto -->
-        <div class="section">
-            <h2>Cryptocurrency</h2>
-            <div class="form-group">
-                <label>Crypto Ticker:</label>
-                <input type="text" id="cryptoTicker" placeholder="e.g., BTC, ETH, DOGE" style="text-transform: uppercase;">
-            </div>
-            <button onclick="addCrypto()">Add Crypto</button>
-            <div class="item-list" id="cryptoList"></div>
-        </div>
-        
-        <!-- Weather Locations -->
-        <div class="section">
-            <h2>Weather Locations</h2>
-            <div class="form-group">
-                <label>Location Name:</label>
-                <input type="text" id="weatherName" placeholder="e.g., New York">
-            </div>
-            <div class="form-group">
-                <label>City:</label>
-                <input type="text" id="weatherCity" placeholder="e.g., New York">
-            </div>
-            <div class="form-group">
-                <label>State/Country:</label>
-                <input type="text" id="weatherState" placeholder="e.g., NY, US">
-            </div>
-            <div class="form-group">
-                <label>OpenWeatherMap API Key:</label>
-                <input type="text" id="weatherApiKey" placeholder="Your API key">
-            </div>
-            <button onclick="addWeatherLocation()">Add Location</button>
-            <div class="item-list" id="weatherList"></div>
-        </div>
-        
         <!-- Favorite Teams -->
         <div class="section">
             <h2>Favorite Sports Teams</h2>
@@ -346,6 +311,95 @@ HTML_TEMPLATE = """
             </div>
             <button onclick="addFavoriteTeam()">Add Favorite Team</button>
             <div class="item-list" id="favoritesList"></div>
+        </div>
+        
+        <!-- Fantasy Players -->
+        <div class="section">
+            <h2>Fantasy Players</h2>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="fantasyEnabled" onchange="updateFantasyEnabled()">
+                    Enable Fantasy Mode
+                </label>
+            </div>
+            <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
+                Add players to track their stats in fantasy mode. Supports NFL, NBA, and NHL. Use up/down flicks to cycle through sports, left/right to navigate players within each sport.
+            </p>
+            <div class="form-group">
+                <label>Sport:</label>
+                <select id="fantasySport">
+                    <option value="nfl">NFL</option>
+                    <option value="nba">NBA</option>
+                    <option value="nhl">NHL</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Player Name:</label>
+                <input type="text" id="fantasyPlayerName" placeholder="e.g., Patrick Mahomes, Travis Kelce">
+            </div>
+            <div class="form-group">
+                <label>Team Abbreviation:</label>
+                <input type="text" id="fantasyTeam" placeholder="e.g., KC, BUF, SF" style="text-transform: uppercase;">
+            </div>
+            <button onclick="addFantasyPlayer()">Add Fantasy Player</button>
+            <div class="item-list" id="fantasyPlayersList"></div>
+        </div>
+        
+        <!-- Stocks -->
+        <div class="section">
+            <h2>Stocks</h2>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="stocksEnabled" onchange="updateStocksEnabled()">
+                    Enable Stocks/Crypto Mode
+                </label>
+            </div>
+            <div class="form-group">
+                <label>Stock Ticker:</label>
+                <input type="text" id="stockTicker" placeholder="e.g., AAPL, MSFT, GOOGL" style="text-transform: uppercase;">
+            </div>
+            <button onclick="addStock()">Add Stock</button>
+            <div class="item-list" id="stocksList"></div>
+        </div>
+        
+        <!-- Crypto -->
+        <div class="section">
+            <h2>Cryptocurrency</h2>
+            <div class="form-group">
+                <label>Crypto Ticker:</label>
+                <input type="text" id="cryptoTicker" placeholder="e.g., BTC, ETH, DOGE" style="text-transform: uppercase;">
+            </div>
+            <button onclick="addCrypto()">Add Crypto</button>
+            <div class="item-list" id="cryptoList"></div>
+        </div>
+        
+        <!-- Weather Locations -->
+        <div class="section">
+            <h2>Weather Locations</h2>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="weatherEnabled" onchange="updateWeatherEnabled()">
+                    Enable Weather Mode
+                </label>
+            </div>
+            <div class="form-group">
+                <label>Location Name:</label>
+                <input type="text" id="weatherName" placeholder="e.g., New York">
+            </div>
+            <div class="form-group">
+                <label>City:</label>
+                <input type="text" id="weatherCity" placeholder="e.g., New York">
+            </div>
+            <div class="form-group">
+                <label>State/Country:</label>
+                <input type="text" id="weatherState" placeholder="e.g., NY, US">
+            </div>
+            <div class="form-group">
+                <label>OpenWeatherMap API Key:</label>
+                <input type="text" id="weatherApiKey" placeholder="Your API key">
+            </div>
+            <button onclick="addWeatherLocation()">Add Location</button>
+            <div class="item-list" id="weatherList"></div>
         </div>
         
         <!-- Music Configuration -->
@@ -442,6 +496,48 @@ HTML_TEMPLATE = """
                 }
             } catch (e) {
                 console.error('Error updating music enabled:', e);
+            }
+        }
+        
+        function updateFantasyEnabled() {
+            if (!config.fantasy_mode) {
+                config.fantasy_mode = {};
+            }
+            try {
+                const fantasyEnabledEl = document.getElementById('fantasyEnabled');
+                if (fantasyEnabledEl) {
+                    config.fantasy_mode.enabled = fantasyEnabledEl.checked;
+                }
+            } catch (e) {
+                console.error('Error updating fantasy enabled:', e);
+            }
+        }
+        
+        function updateStocksEnabled() {
+            if (!config.stocks_mode) {
+                config.stocks_mode = {};
+            }
+            try {
+                const stocksEnabledEl = document.getElementById('stocksEnabled');
+                if (stocksEnabledEl) {
+                    config.stocks_mode.enabled = stocksEnabledEl.checked;
+                }
+            } catch (e) {
+                console.error('Error updating stocks enabled:', e);
+            }
+        }
+        
+        function updateWeatherEnabled() {
+            if (!config.weather_mode) {
+                config.weather_mode = {};
+            }
+            try {
+                const weatherEnabledEl = document.getElementById('weatherEnabled');
+                if (weatherEnabledEl) {
+                    config.weather_mode.enabled = weatherEnabledEl.checked;
+                }
+            } catch (e) {
+                console.error('Error updating weather enabled:', e);
             }
         }
         
@@ -635,6 +731,63 @@ HTML_TEMPLATE = """
                 `).join('');
             }
             
+            // Fantasy Players
+            if (!config.fantasy_players) {
+                config.fantasy_players = [];
+            }
+            const fantasyPlayersList = document.getElementById('fantasyPlayersList');
+            if (fantasyPlayersList) {
+                fantasyPlayersList.innerHTML = config.fantasy_players.map((item, idx) => `
+                    <div class="item">
+                        <div class="item-info">
+                            <strong>${item.name}</strong> - ${item.team || 'N/A'} (${item.sport ? item.sport.toUpperCase() : 'NFL'})
+                        </div>
+                        <div class="item-actions">
+                            <button class="danger" onclick="removeItem('fantasy_players', ${idx})">Remove</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            
+            // Fantasy configuration
+            if (!config.fantasy_mode) {
+                config.fantasy_mode = { enabled: true };
+            }
+            try {
+                const fantasyEnabledEl = document.getElementById('fantasyEnabled');
+                if (fantasyEnabledEl) {
+                    fantasyEnabledEl.checked = config.fantasy_mode.enabled !== false; // Default to true
+                }
+            } catch (e) {
+                console.error('Error initializing fantasy config:', e);
+            }
+            
+            // Stocks configuration
+            if (!config.stocks_mode) {
+                config.stocks_mode = { enabled: true };
+            }
+            try {
+                const stocksEnabledEl = document.getElementById('stocksEnabled');
+                if (stocksEnabledEl) {
+                    stocksEnabledEl.checked = config.stocks_mode.enabled !== false; // Default to true
+                }
+            } catch (e) {
+                console.error('Error initializing stocks config:', e);
+            }
+            
+            // Weather configuration
+            if (!config.weather_mode) {
+                config.weather_mode = { enabled: true };
+            }
+            try {
+                const weatherEnabledEl = document.getElementById('weatherEnabled');
+                if (weatherEnabledEl) {
+                    weatherEnabledEl.checked = config.weather_mode.enabled !== false; // Default to true
+                }
+            } catch (e) {
+                console.error('Error initializing weather config:', e);
+            }
+            
             // Music configuration
             if (!config.music) {
                 config.music = { enabled: false, preferred_source: "spotify", POLLING_INTERVAL_SECONDS: 2 };
@@ -752,6 +905,37 @@ HTML_TEMPLATE = """
             renderLists();
         }
         
+        function addFantasyPlayer() {
+            if (!config.fantasy_players) {
+                config.fantasy_players = [];
+            }
+            const sport = document.getElementById('fantasySport').value.trim().toLowerCase();
+            const name = document.getElementById('fantasyPlayerName').value.trim();
+            const team = document.getElementById('fantasyTeam').value.trim().toUpperCase();
+            if (!name) {
+                showMessage('Please enter a player name', true);
+                return;
+            }
+            if (!team) {
+                showMessage('Please enter a team abbreviation', true);
+                return;
+            }
+            // Check for duplicates
+            const isDuplicate = config.fantasy_players.some(item => 
+                item.name.toLowerCase() === name.toLowerCase() && 
+                item.team && item.team.toUpperCase() === team.toUpperCase() &&
+                item.sport && item.sport.toLowerCase() === sport.toLowerCase()
+            );
+            if (isDuplicate) {
+                showMessage('This player is already in your fantasy list', true);
+                return;
+            }
+            config.fantasy_players.push({ name, team, sport: sport || 'nfl' });
+            document.getElementById('fantasyPlayerName').value = '';
+            document.getElementById('fantasyTeam').value = '';
+            renderLists();
+        }
+        
         function removeItem(listName, index) {
             config[listName].splice(index, 1);
             renderLists();
@@ -759,6 +943,45 @@ HTML_TEMPLATE = """
         
         async function saveConfig() {
             try {
+                // Update fantasy config from form
+                if (!config.fantasy_mode) {
+                    config.fantasy_mode = {};
+                }
+                try {
+                    const fantasyEnabledEl = document.getElementById('fantasyEnabled');
+                    if (fantasyEnabledEl) {
+                        config.fantasy_mode.enabled = fantasyEnabledEl.checked;
+                    }
+                } catch (e) {
+                    console.error('Error reading fantasy config from form:', e);
+                }
+                
+                // Update stocks config from form
+                if (!config.stocks_mode) {
+                    config.stocks_mode = {};
+                }
+                try {
+                    const stocksEnabledEl = document.getElementById('stocksEnabled');
+                    if (stocksEnabledEl) {
+                        config.stocks_mode.enabled = stocksEnabledEl.checked;
+                    }
+                } catch (e) {
+                    console.error('Error reading stocks config from form:', e);
+                }
+                
+                // Update weather config from form
+                if (!config.weather_mode) {
+                    config.weather_mode = {};
+                }
+                try {
+                    const weatherEnabledEl = document.getElementById('weatherEnabled');
+                    if (weatherEnabledEl) {
+                        config.weather_mode.enabled = weatherEnabledEl.checked;
+                    }
+                } catch (e) {
+                    console.error('Error reading weather config from form:', e);
+                }
+                
                 // Update music config from form
                 if (!config.music) {
                     config.music = {};
