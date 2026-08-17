@@ -1028,6 +1028,12 @@ HTML_TEMPLATE = """
 """
 
 
+@app.route('/healthz')
+def healthz():
+    """Liveness check -- always returns 200 if the process is running."""
+    return {'status': 'ok'}, 200
+
+
 @app.route('/')
 def index():
     """Main configuration page"""

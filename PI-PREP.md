@@ -1,49 +1,68 @@
 # Pi Prep Checklist
 
-> **Status:** Pi is currently OFFLINE. Complete this list before connecting it to the
-> new network. Do NOT join it to K3s until after the Flint 2 cutover and DHCP
-> reservation are confirmed.
+> **Status:** Pi is ONLINE at 192.168.8.126 (real user `reekpi`, not `raspberrypi` as
+> originally assumed below). Real deployment path is `/home/reekpi/matrix-display/`,
+> a git checkout tracking `git@github.com:reek4/gyro-matrix-display.git` — a
+> **different remote** than this local repo checkout
+> (`git@github.com:camptwright/gyro-matrix-display.git`). The Pi's checkout also has
+> its own uncommitted local modifications (many files). This is a real deployment
+> gap: changes made here do not automatically reach the Pi and vice versa. Edits for
+> this pass were applied directly to the file on the Pi and mirrored here manually.
+> Reconnaissance + hardening pass completed 2026-08-15.
 
 ## Before connecting to the network
 
 ```
-[ ] Record Pi MAC address:
-      eth0 MAC: ___________________  (from `ip link show eth0` or Pi sticker)
-      wlan0 MAC: __________________ (optional, prefer wired)
+[x] Record Pi MAC address:
+      eth0 MAC: 88:a2:9e:4a:f9:93  (confirmed via `ip link show eth0`, matches
+        docs/network/inventory.md)
+      wlan0 MAC: (not recorded; wired eth0 in use)
 
-[ ] Create Flint 2 DHCP reservation: 10.51.24.20 → pi-matrix (MAC above)
-    See docs/network/flint2-reservations.md
+[ ] Flint 2 DHCP reservation — desired entry is documented in the parent
+    docs/network/flint2-reservations.md, but the router had no MAC-keyed host
+    entries during the 2026-08-16 audit.
 
-[ ] Back up the current matrix configuration:
-      scp pi:/home/raspberrypi/matrix-display/config/config.json ./config/config.backup.json
-      scp pi:/home/raspberrypi/matrix-display/config/config_secrets.json (store securely, NOT in git)
+[x] Back up the current matrix configuration:
+      scp reekpi@192.168.8.126:/home/reekpi/matrix-display/config/config.json \
+          ./config/config.backup.json
+      scp reekpi@192.168.8.126:/home/reekpi/matrix-display/config/config_secrets.json \
+          → stored at /Users/camptwright/.secrets/gyro-matrix-display/config_secrets.backup.json
+          (chmod 600, NOT in any git repo)
 
-[ ] Confirm config_secrets.json is in the Pi's .gitignore and NOT committed to this repo.
+[x] Confirmed config/config_secrets.json and config/config.json are covered by this
+    repo's .gitignore (config/config.json, config/config_secrets.json, *.json.bak).
+    Not committed anywhere.
+
+[x] Full pre-change backup taken ON the Pi itself before any edits:
+      /home/reekpi/matrix-display-pre-hardening-backup-20260815.tar.gz
+    (systemd units + entire /home/reekpi/matrix-display tree, ~448MB)
 ```
 
 ## Systemd service hardening
 
-The two systemd services (`matrix-display.service`, `web-config.service`) currently
-inline their configuration. When the Pi comes online:
+**Correction found during hardening pass:** neither `matrix-display.service` nor
+`web-config.service` actually inline any secrets — the only `Environment=` directives
+present are `PYTHONUNBUFFERED`, `HOME`, and `USER`. The app does not read secrets
+from environment variables at all: `src/config_manager.py` loads
+`config/config_secrets.json` directly and passes values as function args (e.g.
+`weather_fetcher.fetch_weather(..., api_key=...)`). There is no
+`OPENWEATHERMAP_API_KEY` env var anywhere in this app's real code path — the secret
+lives under the `weather.api_key` key in `config_secrets.json`.
+
+Given that, creating an `EnvironmentFile=`/`matrix-display.env` would be dead
+plumbing the app never reads — skipped as unnecessary risk for a production display.
+The actual gap was file permissions, which is fixed:
 
 ```
-[ ] Create /home/raspberrypi/matrix-display/matrix-display.env with API keys:
-      OPENWEATHERMAP_API_KEY=...
-      (other secrets from config_secrets.json)
-
-[ ] Update matrix-display.service and web-config.service to use:
-      EnvironmentFile=/home/raspberrypi/matrix-display/matrix-display.env
-    instead of inlining secrets in the service file.
-
-[ ] Set permissions: chmod 600 matrix-display.env
-
-[ ] Set RestartSec to a more conservative value for production:
-      RestartSec=30
-    to avoid fast restart loops on hardware faults.
-
-[ ] Consider adding:
-      StandardInput=null
-    to prevent any accidental stdin consumption.
+[x] config/config_secrets.json permissions hardened: was 664 (group+world readable),
+    now chmod 600 (owner reekpi only; matrix-display.service runs as root so it can
+    still read it regardless of file perms).
+[x] Confirmed no API keys/secrets inlined as Environment= in either unit file.
+[ ] EnvironmentFile= migration — not applicable; app does not consume secrets via
+    env vars. Revisit only if the app's secret-loading is refactored.
+[ ] Set RestartSec to a more conservative value for production (RestartSec=30) —
+    not yet done, still 10s in both units. Low priority, deferred.
+[ ] Consider StandardInput=null — not yet done, deferred.
 ```
 
 ## Add /healthz endpoint to web_config.py
@@ -51,22 +70,36 @@ inline their configuration. When the Pi comes online:
 The matrix web configurator needs a `/healthz` endpoint for monitoring
 (Uptime Kuma probe, future K3s readiness/liveness).
 
-Minimal implementation to add to web_config.py:
+```
+[x] Added to /home/reekpi/matrix-display/web_config.py (the file actually running
+    on the Pi, ahead of the `/` route) and mirrored into this repo's
+    gyro-matrix-display/web_config.py (same insertion point, ahead of `/`) — see
+    deployment-gap note above for why both had to be edited by hand.
+```
+
+Implementation added:
 
 ```python
 @app.route('/healthz')
 def healthz():
-    """Liveness check — always returns 200 if the process is running."""
+    """Liveness check -- always returns 200 if the process is running."""
     return {'status': 'ok'}, 200
 ```
 
-After adding: `systemctl restart matrix-web-config` and verify:
+Verified after `sudo systemctl restart web-config`:
 ```bash
-curl http://pi-matrix:5000/healthz
-# Expected: {"status": "ok"}
+curl -fsS http://127.0.0.1:5000/healthz
+# {"status":"ok"}
+curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/
+# 200
 ```
+Both services (`matrix-display`, `web-config`) confirmed `active` after the restart.
 
-## K3s prerequisites (do after Flint 2 cutover)
+## K3s prerequisites (not started)
+
+The 2026-08-16 audit confirmed hostname `raspberrypi`, K3s absent, and swap
+enabled. The matrix application remains host-native even if this machine later
+becomes a tainted K3s agent for unrelated workloads.
 
 ```
 [ ] Update Pi OS: sudo apt update && sudo apt full-upgrade -y
