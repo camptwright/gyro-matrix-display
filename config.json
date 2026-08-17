@@ -1,0 +1,134 @@
+{
+  "brightness": 20,
+  "timezone": "America/New_York",
+  "clock_locations": [
+    {
+      "name": "College Station",
+      "timezone": "America/Chicago"
+    },
+    {
+      "name": "New York",
+      "timezone": "America/New_York"
+    }
+  ],
+  "sports": [
+    {
+      "name": "NFL",
+      "id": null
+    },
+    {
+      "name": "NBA",
+      "id": null
+    },
+    {
+      "name": "NHL",
+      "id": null
+    },
+    {
+      "name": "NCAAF",
+      "id": null
+    },
+    {
+      "name": "NCAAM",
+      "id": null
+    }
+  ],
+  "stocks": [
+    "AAPL",
+    "MSFT",
+    "GOOGL"
+  ],
+  "crypto": [
+    "BTC",
+    "ETH",
+    "DOGE"
+  ],
+  "fantasy_players": [
+    {
+      "name": "TreVeyon Henderson",
+      "team": "NE",
+      "sport": "nfl"
+    },
+    {
+      "name": "LeBron James",
+      "team": "LAL",
+      "sport": "nba"
+    }
+  ],
+  "weather_locations": [
+    {
+      "name": "College Station",
+      "city": "College Station",
+      "state": "TX, US",
+      "api_key": "f3b408544385bb4c0b19654997e8055e"
+    }
+  ],
+  "music": {
+    "enabled": true,
+    "preferred_source": "spotify",
+    "POLLING_INTERVAL_SECONDS": 2
+  },
+  "favorite_teams": [
+    {
+      "sport": "nfl",
+      "team": "DAL"
+    },
+    {
+      "sport": "nfl",
+      "team": "BUF"
+    },
+    {
+      "sport": "nfl",
+      "team": "DEN"
+    },
+    {
+      "sport": "nfl",
+      "team": "BAL"
+    },
+    {
+      "sport": "nba",
+      "team": "DAL"
+    },
+    {
+      "sport": "nba",
+      "team": "DEN"
+    },
+    {
+      "sport": "nba",
+      "team": "LAL"
+    },
+    {
+      "sport": "nhl",
+      "team": "DAL"
+    },
+    {
+      "sport": "nhl",
+      "team": "VAN"
+    },
+    {
+      "sport": "nhl",
+      "team": "DEN"
+    },
+    {
+      "sport": "nhl",
+      "team": "NYR"
+    },
+    {
+      "sport": "ncaaf",
+      "team": "TA&M"
+    },
+    {
+      "sport": "ncaam",
+      "team": "TA&M"
+    }
+  ],
+  "fantasy_mode": {
+    "enabled": true
+  },
+  "stocks_mode": {
+    "enabled": true
+  },
+  "weather_mode": {
+    "enabled": true
+  }
+}

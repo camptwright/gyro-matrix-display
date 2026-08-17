@@ -10,8 +10,10 @@ import logging
 import sys
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import pytz
 import requests
@@ -34,7 +36,7 @@ except ImportError:
     RGBMatrix = None
     RGBMatrixOptions = None
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
 
 # Import managers from LEDMatrix example if available
 # Note: These are optional - the system works with basic fallback displays if not available
@@ -100,40 +102,51 @@ class MatrixDisplay:
             # Common options: 'regular', 'adafruit-hat', 'adafruit-hat-pwm', 'adafruit-rgb-matrix-pi'
             options.hardware_mapping = 'adafruit-hat-pwm'  # Use adafruit-hat-pwm for better flicker reduction
             
-            # Pi 3B optimized settings for reduced flickering
+            # ============================================
+            # RASPBERRY PI 4B + ADAFRUIT BONNET (OPTIMIZED)
+            # ============================================
+            # Adafruit 64x32 P6 panel with RGB Matrix Bonnet
+            
+            # Brightness
             options.brightness = self.brightness
-            options.pwm_bits = 11  # Increased for smoother color transitions
-            options.pwm_lsb_nanoseconds = 130  # Adjusted for better PWM resolution
+            
+            # PWM Settings - Adafruit recommended
+            options.pwm_bits = 11                    # Full color depth
+            options.pwm_lsb_nanoseconds = 130        # Good balance
+            
+            # RGB sequence
             options.led_rgb_sequence = 'RGB'
-            options.gpio_slowdown = 2  # Important for Pi 3B stability
+            
+            # GPIO Slowdown - Pi 4B standard
+            options.gpio_slowdown = 2
+            
+            # Refresh rate
             options.show_refresh_rate = False
-            options.limit_refresh_rate_hz = 120  # Higher refresh rate reduces visible flicker
+            options.limit_refresh_rate_hz = 0  # No limit
             
-            # Force software pulsing to avoid startup failures
-            # Even with capability set, the RGBMatrix library may not be able to use hardware pulsing
-            # Software pulsing still works well with the optimized PWM settings below
-            use_hardware_pulsing = False
-            logger.info("Using software pulsing (hardware pulsing disabled to ensure reliable startup)")
+            # Panel configuration (Adafruit 64x32)
+            options.row_address_type = 0  # Default for Adafruit panels
+            options.scan_mode = 0         # Progressive scan
+            options.multiplexing = 0      # Direct (standard for Adafruit)
             
-            # Always use software pulsing to prevent library from exiting
-            options.disable_hardware_pulsing = True
+            # HARDWARE PULSING - ENABLED for Pi 4B + Adafruit Bonnet
+            # The 'adafruit-hat-pwm' mapping uses GPIO 4 for hardware PWM
+            # This significantly reduces flicker!
+            # NOTE: Service must run as root for hardware pulsing to work
+            options.disable_hardware_pulsing = False
+            options.drop_privileges = False  # Keep root privileges for hardware PWM
             
-            logger.info(f"Initializing RGB Matrix: {options.rows}x{options.cols}, brightness={self.brightness}, hardware_pulsing={use_hardware_pulsing}, disable_hardware_pulsing={options.disable_hardware_pulsing}")
+            logger.info(f"Pi 4B Adafruit Mode: pwm_bits={options.pwm_bits}, gpio_slowdown={options.gpio_slowdown}, hardware_pulsing=ENABLED")
             
-            # If we think we can use hardware pulsing but it fails, the library will exit
-            # So we need to be very conservative - only use hardware if we're absolutely sure
-            # For now, let's default to software pulsing to ensure the service starts
-            # The user can enable hardware pulsing later if needed
-            if use_hardware_pulsing:
-                logger.warning("Hardware pulsing enabled - if service fails to start, capability may not be working correctly")
+            logger.info(f"Initializing RGB Matrix: {options.rows}x{options.cols}, brightness={self.brightness}")
             
             self.matrix = RGBMatrix(options=options)
             self.offscreen_canvas = self.matrix.CreateFrameCanvas()
             self.image = Image.new('RGB', (self.matrix.width, self.matrix.height))
             self.draw = ImageDraw.Draw(self.image)
             
-            # Verify matrix is actually initialized and can be queried
-            logger.info(f"RGB Matrix initialized successfully (hardware_pulsing={use_hardware_pulsing})")
+            # Verify matrix is actually initialized
+            logger.info(f"RGB Matrix initialized successfully with hardware pulsing")
             logger.info(f"Matrix dimensions: {self.matrix.width}x{self.matrix.height}")
             logger.info(f"Matrix object type: {type(self.matrix)}")
             logger.info(f"Offscreen canvas type: {type(self.offscreen_canvas)}")
@@ -178,6 +191,53 @@ class MatrixDisplay:
             self.tiny_font = ImageFont.load_default()
         
         # Display is ready - no test pattern needed
+    
+    def optimize_image_for_matrix(self, img, enhance_contrast=True, enhance_brightness=False, sharpen=True):
+        """
+        Optimize an image for the LED matrix display
+        - Enhance contrast for better visibility
+        - Apply sharpening for crisp details
+        - Optional brightness adjustment
+        """
+        try:
+            # Ensure RGB mode
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Enhance contrast for better color pop on LED matrix
+            if enhance_contrast:
+                enhancer = ImageEnhance.Contrast(img)
+                img = enhancer.enhance(1.3)  # 30% more contrast
+            
+            # Optional brightness boost (useful for photos)
+            if enhance_brightness:
+                enhancer = ImageEnhance.Brightness(img)
+                img = enhancer.enhance(1.15)  # 15% brighter
+            
+            # Sharpen for crisp details on small display
+            if sharpen:
+                img = img.filter(ImageFilter.SHARPEN)
+            
+            # Enhance color saturation slightly for LED matrix
+            enhancer = ImageEnhance.Color(img)
+            img = enhancer.enhance(1.2)  # 20% more saturated
+            
+            return img
+        except Exception as e:
+            logger.warning(f"Error optimizing image: {e}")
+            return img
+    
+    def resize_image_smooth(self, img, target_width, target_height):
+        """
+        Resize image with high-quality downsampling
+        Uses LANCZOS for best quality on small displays
+        """
+        try:
+            # Use LANCZOS (best quality) for downsampling
+            return img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+        except Exception as e:
+            logger.warning(f"Error resizing image: {e}")
+            return img.resize((target_width, target_height))
             
     def set_brightness(self, brightness: int):
         """Set display brightness (0-100)"""
@@ -558,6 +618,9 @@ class DisplayController:
         self.last_update = 0  # Initialize to 0 so first update happens immediately
         self.update_interval = 0.1  # Update every 0.1 seconds for smoother display and responsiveness
         self.reload_file = "/tmp/matrix_display_reload"
+        self.mode_file = "/tmp/matrix_display_mode"
+        self.brightness_file = "/tmp/matrix_display_brightness"
+        self.nav_file = "/tmp/matrix_display_nav"
         self.last_config_check = time.time()
         
         # Preload favorites cache in background if favorite teams are configured
@@ -622,6 +685,70 @@ class DisplayController:
         except Exception as e:
             logger.error(f"Error saving config: {e}")
             
+    def _handle_nav_up(self):
+        """Handle up navigation based on current mode (matches gyro 'up' gesture)"""
+        if self.current_mode == "sports":
+            self.next_sport()  # UP = next (forward)
+        elif self.current_mode == "stocks":
+            self.switch_stocks_submode()
+        elif self.current_mode == "images":
+            self.switch_image_list()
+        elif self.current_mode == "fantasy":
+            self.next_fantasy_sport()  # UP = next sport
+        elif self.current_mode == "weather":
+            self.next_weather_location()  # UP = next location
+        elif self.current_mode == "clock":
+            # Cycle through clock locations
+            if self.clock_locations:
+                self.current_clock_location = (self.current_clock_location + 1) % len(self.clock_locations)
+        logger.info(f"Navigation UP in mode: {self.current_mode}")
+    
+    def _handle_nav_down(self):
+        """Handle down navigation based on current mode (matches gyro 'down' gesture)"""
+        if self.current_mode == "sports":
+            self.prev_sport()  # DOWN = previous (backward)
+        elif self.current_mode == "stocks":
+            self.switch_stocks_submode()
+        elif self.current_mode == "images":
+            self.switch_image_list()
+        elif self.current_mode == "fantasy":
+            self.prev_fantasy_sport()  # DOWN = previous sport
+        elif self.current_mode == "weather":
+            self.prev_weather_location()  # DOWN = previous location
+        elif self.current_mode == "clock":
+            # Cycle through clock locations
+            if self.clock_locations:
+                self.current_clock_location = (self.current_clock_location - 1) % len(self.clock_locations)
+        logger.info(f"Navigation DOWN in mode: {self.current_mode}")
+    
+    def _handle_nav_left(self):
+        """Handle left navigation based on current mode (matches gyro 'left' gesture)"""
+        if self.current_mode == "sports":
+            self.prev_game()  # LEFT = previous game
+        elif self.current_mode == "stocks":
+            self.prev_ticker()  # LEFT = previous ticker
+        elif self.current_mode == "images":
+            self.prev_image()  # LEFT = previous image
+        elif self.current_mode == "fantasy":
+            self.prev_fantasy_player()  # LEFT = previous player
+        elif self.current_mode == "clock":
+            self.prev_clock_location()  # LEFT = previous clock
+        logger.info(f"Navigation LEFT in mode: {self.current_mode}")
+    
+    def _handle_nav_right(self):
+        """Handle right navigation based on current mode (matches gyro 'right' gesture)"""
+        if self.current_mode == "sports":
+            self.next_game()  # RIGHT = next game
+        elif self.current_mode == "stocks":
+            self.next_ticker()  # RIGHT = next ticker
+        elif self.current_mode == "images":
+            self.next_image()  # RIGHT = next image
+        elif self.current_mode == "fantasy":
+            self.next_fantasy_player()  # RIGHT = next player
+        elif self.current_mode == "clock":
+            self.next_clock_location()  # RIGHT = next clock
+        logger.info(f"Navigation RIGHT in mode: {self.current_mode}")
+    
     def reload_config(self):
         """Reload configuration from file"""
         try:
@@ -849,106 +976,85 @@ class DisplayController:
         effective_list.extend(self.sports_list)
         return effective_list
     
+    def _fetch_games_for_favorite_sport(self, sport_id: str, team_set: set, current_time: float) -> Tuple[str, List[Dict], set]:
+        """Fetch games for one sport (used for parallel fetching). Returns (sport_id, all_games, team_set)."""
+        try:
+            from sports_fetcher import fetch_espn_scores_for_date_range, fetch_espn_scores_for_week, fetch_ncaaf_games_with_week_iteration
+            cached_data = self.date_range_cache.get(sport_id)
+            all_games = None
+            if cached_data and (current_time - cached_data[1]) < 600:  # 10 min cache
+                all_games = cached_data[0]
+            elif sport_id in self.sports_data_cache and (current_time - self.last_sports_update.get(sport_id, 0)) < 60:
+                # Use fresh sports_data_cache (within 60s) - avoids redundant API call
+                all_games = self.sports_data_cache[sport_id]
+            else:
+                if sport_id == 'nfl':
+                    all_games = self.sports_data_cache.get(sport_id) or fetch_espn_scores_for_week('nfl', week_offset=0)
+                elif sport_id == 'ncaaf':
+                    all_games = []
+                    for team_abbr in team_set:
+                        all_games.extend(fetch_ncaaf_games_with_week_iteration(team_abbr, max_weeks_back=2))
+                    seen, unique = set(), []
+                    for g in all_games:
+                        k = (g.get('date'), g.get('home_team'), g.get('away_team'))
+                        if k not in seen:
+                            seen.add(k)
+                            unique.append(g)
+                    all_games = unique
+                elif sport_id in ['nba', 'nhl']:
+                    all_games = fetch_espn_scores_for_date_range(sport_id, days_back=1, days_forward=1)
+                elif sport_id in ['ncaam', 'ncaab']:
+                    all_games = fetch_espn_scores_for_date_range('ncaam', days_back=1, days_forward=3)
+                else:
+                    all_games = fetch_espn_scores_for_date_range(sport_id, days_back=2, days_forward=4)
+            return (sport_id, all_games or [], team_set)
+        except Exception as e:
+            logger.error(f"Error fetching games for {sport_id}: {e}")
+            return (sport_id, [], team_set)
+
     def _get_favorite_games(self):
-        """Get all games involving favorite teams, including closest previous/next games"""
+        """Get all games involving favorite teams, including closest previous/next games. Parallel fetching for speed."""
         favorite_games = []
         if not self.favorite_teams or len(self.favorite_teams) == 0:
             logger.debug("No favorite teams configured")
             return favorite_games
         
-        # Get favorite teams with their sports
         favorite_teams_by_sport = {}
         for fav in self.favorite_teams:
             sport = fav.get('sport', '').lower().strip()
             team_abbr = fav.get('team', '').upper().strip()
             if sport and team_abbr:
-                # Normalize sport names for consistency
                 if sport in ['ncaam', 'ncaab', 'mens-college-basketball', 'college-basketball']:
-                    sport = 'ncaam'  # Use ncaam as the canonical name
+                    sport = 'ncaam'
                 elif sport in ['ncaaf', 'college-football']:
-                    sport = 'ncaaf'  # Use ncaaf as the canonical name
+                    sport = 'ncaaf'
                 if sport not in favorite_teams_by_sport:
                     favorite_teams_by_sport[sport] = set()
                 favorite_teams_by_sport[sport].add(team_abbr)
         
         if not favorite_teams_by_sport:
-            logger.debug("No valid favorite teams found")
             return favorite_games
         
-        logger.debug(f"Looking for favorite teams by sport: {favorite_teams_by_sport}")
-        
-        # Get current time for comparison
-        from datetime import datetime
         now = datetime.now()
         current_time = time.time()
         
-        # Cache date range fetches for 10 minutes to avoid blocking
-        DATE_RANGE_CACHE_TTL = 600  # 10 minutes
+        # Fetch all sports in parallel
+        sport_results = []
+        with ThreadPoolExecutor(max_workers=min(6, len(favorite_teams_by_sport) + 2)) as executor:
+            futures = {executor.submit(self._fetch_games_for_favorite_sport, sid, team_set, current_time): sid 
+                      for sid, team_set in favorite_teams_by_sport.items()}
+            for future in as_completed(futures):
+                try:
+                    sport_id, all_games, team_set = future.result()
+                    sport_results.append((sport_id, all_games, team_set))
+                    if all_games and sport_id not in self.date_range_cache:
+                        self.date_range_cache[sport_id] = (all_games, current_time)
+                except Exception as e:
+                    logger.error(f"Future error for {futures[future]}: {e}")
         
-        # For each sport with favorite teams, fetch games from a date range (with caching)
-        for sport_id, team_set in favorite_teams_by_sport.items():
+        # Process results (build favorite_games list)
+        for sport_id, all_games, team_set in sport_results:
             try:
-                # Check cache first
-                cached_data = self.date_range_cache.get(sport_id)
-                all_games = None
-                
-                if cached_data and (current_time - cached_data[1]) < DATE_RANGE_CACHE_TTL:
-                    # Use cached data
-                    all_games = cached_data[0]
-                    logger.debug(f"Using cached date range games for {sport_id} ({len(all_games)} games)")
-                else:
-                    # Fetch games using sport-specific date ranges
-                    from sports_fetcher import fetch_espn_scores_for_date_range, fetch_espn_scores_for_week, fetch_ncaaf_games_with_week_iteration
-                    
-                    if sport_id == 'nfl':
-                        # NFL: Use current week (check cache first, then fetch if needed)
-                        if sport_id in self.sports_data_cache:
-                            # Use already-fetched current week games from regular sports page
-                            all_games = self.sports_data_cache[sport_id]
-                            logger.debug(f"Using cached NFL games from sports_data_cache ({len(all_games)} games)")
-                        else:
-                            # Fetch current week
-                            all_games = fetch_espn_scores_for_week('nfl', week_offset=0)
-                            logger.info(f"Fetched NFL current week games ({len(all_games)} games)")
-                    elif sport_id == 'ncaaf':
-                        # NCAAF: For each favorite team, iterate through weeks until games found
-                        all_games = []
-                        for team_abbr in team_set:
-                            team_games = fetch_ncaaf_games_with_week_iteration(team_abbr, max_weeks_back=4)
-                            all_games.extend(team_games)
-                        # Remove duplicates
-                        seen_games = set()
-                        unique_games = []
-                        for game in all_games:
-                            game_key = (
-                                game.get('date', ''),
-                                game.get('home_team', ''),
-                                game.get('away_team', '')
-                            )
-                            if game_key not in seen_games:
-                                seen_games.add(game_key)
-                                unique_games.append(game)
-                        all_games = unique_games
-                        logger.info(f"Fetched NCAAF games for favorite teams ({len(all_games)} unique games)")
-                    elif sport_id in ['nba', 'nhl']:
-                        # NBA/NHL: Previous day, today, next day (3 days)
-                        all_games = fetch_espn_scores_for_date_range(sport_id, days_back=1, days_forward=1)
-                        logger.info(f"Fetched {sport_id} games for previous day, today, next day ({len(all_games)} games)")
-                    elif sport_id in ['ncaam', 'ncaab']:
-                        # NCAAM: Previous 2 days, next 5 days (7 days)
-                        # Use 'ncaam' as the canonical sport_id for fetching
-                        all_games = fetch_espn_scores_for_date_range('ncaam', days_back=2, days_forward=5)
-                        logger.info(f"Fetched ncaam games for previous 2 days, next 5 days ({len(all_games)} games)")
-                    else:
-                        # Default: 3 days back, 7 days forward
-                        all_games = fetch_espn_scores_for_date_range(sport_id, days_back=3, days_forward=7)
-                        logger.info(f"Fetched {sport_id} games with default date range ({len(all_games)} games)")
-                    
-                    # Cache the results
-                    self.date_range_cache[sport_id] = (all_games, current_time)
-                    logger.info(f"Cached {len(all_games)} games for {sport_id}")
-                
-                # For each favorite team in this sport, find closest previous and next games
                 for team_abbr in team_set:
                     team_games = []
                     for game in all_games:
@@ -1020,14 +1126,12 @@ class DisplayController:
                             ):
                                 favorite_games.append(game_copy)
                                 logger.debug(f"Found live game for {team_abbr}: {game_copy.get('away_team')} @ {game_copy.get('home_team')}")
-                
             except Exception as e:
-                logger.error(f"Error fetching games for favorite sport {sport_id}: {e}")
+                logger.error(f"Error processing favorite sport {sport_id}: {e}")
                 import traceback
                 traceback.print_exc()
-                continue
         
-        # Also check games already in cache (for today's games that might already be loaded)
+        # Also check games already in sports_data_cache (for today's games that might already be loaded)
         favorite_team_set = set()
         for fav in self.favorite_teams:
             team_abbr = fav.get('team', '').upper().strip()
@@ -1097,7 +1201,7 @@ class DisplayController:
         if isinstance(sport, dict) and sport.get('is_favorites', False):
             # Use cached favorite games if available and fresh (cache for 5 minutes)
             current_time = time.time()
-            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            FAVORITES_CACHE_TTL = 30  # 30 seconds (maximum speed)
             
             if (isinstance(self.favorites_cache, list) and 
                 len(self.favorites_cache) > 0 and
@@ -1113,12 +1217,13 @@ class DisplayController:
                 
                 for sport_id in favorite_sports:
                     if sport_id and (sport_id not in self.sports_data_cache or 
-                                     current_time - self.last_sports_update > 60):
+                                     current_time - self.last_sports_update.get(sport_id, 0) > 15):
                         try:
                             from sports_fetcher import fetch_espn_scores
                             games = fetch_espn_scores(sport_id)
                             if games:
                                 self.sports_data_cache[sport_id] = games
+                                self.last_sports_update[sport_id] = current_time
                                 logger.info(f"Fetched {len(games)} games for favorite sport {sport_id}")
                         except Exception as e:
                             logger.error(f"Error fetching games for favorite sport {sport_id}: {e}")
@@ -1210,7 +1315,7 @@ class DisplayController:
         if isinstance(sport, dict) and sport.get('is_favorites', False):
             # Use cached favorite games if available and fresh (cache for 5 minutes)
             current_time = time.time()
-            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            FAVORITES_CACHE_TTL = 30  # 30 seconds (maximum speed)
             
             if (isinstance(self.favorites_cache, list) and 
                 len(self.favorites_cache) > 0 and
@@ -1226,12 +1331,13 @@ class DisplayController:
                 
                 for sport_id in favorite_sports:
                     if sport_id and (sport_id not in self.sports_data_cache or 
-                                     current_time - self.last_sports_update > 60):
+                                     current_time - self.last_sports_update.get(sport_id, 0) > 15):
                         try:
                             from sports_fetcher import fetch_espn_scores
                             games = fetch_espn_scores(sport_id)
                             if games:
                                 self.sports_data_cache[sport_id] = games
+                                self.last_sports_update[sport_id] = current_time
                                 logger.info(f"Fetched {len(games)} games for favorite sport {sport_id}")
                         except Exception as e:
                             logger.error(f"Error fetching games for favorite sport {sport_id}: {e}")
@@ -1518,6 +1624,63 @@ class DisplayController:
             except Exception as display_err:
                 logger.error(f"Error showing clock error on display: {display_err}")
             
+    def _format_sports_status_for_matrix(self, status_text, max_width=64, font_size=5):
+        """Format status text to fit within matrix width. Returns (text, truncated)."""
+        if not status_text:
+            return "", False
+        # 64x32 matrix: font 5 fits ~12 chars (MM/DD HH:MMa) with margin
+        MAX_CHARS = 12
+        s = status_text.replace(" - ", " ").replace("  ", " ").strip()
+        # Full phrase replacements: "2nd Half"->"2H", "3rd Quarter"->"3Q", "3rd Period"->"3P" (hockey)
+        for old, new in [
+            ("2nd Half", "2H"), ("1st Half", "1H"), ("2nd half", "2H"), ("1st half", "1H"),
+            ("4th Quarter", "4Q"), ("3rd Quarter", "3Q"), ("2nd Quarter", "2Q"), ("1st Quarter", "1Q"),
+            ("4th quarter", "4Q"), ("3rd quarter", "3Q"), ("2nd quarter", "2Q"), ("1st quarter", "1Q"),
+            ("3rd Period", "3P"), ("2nd Period", "2P"), ("1st Period", "1P"),
+            ("3rd period", "3P"), ("2nd period", "2P"), ("1st period", "1P"),
+            ("Halftime", "HT"), ("halftime", "HT"), ("Overtime", "OT"), ("overtime", "OT"),
+            ("In Progress", "LIVE"), ("in progress", "LIVE"),
+        ]:
+            s = s.replace(old, new)
+        # Generic fallbacks
+        for old, new in [("Quarter", "Q"), ("quarter", "Q"), ("Half", "H"), ("half", "H"), ("Period", "P"), ("period", "P")]:
+            s = s.replace(old, new)
+        if len(s) > MAX_CHARS:
+            s = s[:MAX_CHARS - 1] + "…"
+        return s, len(s) >= MAX_CHARS
+
+    def _draw_sports_status_bar(self, status_text, down_distance, status_id, game):
+        """Draw status bar at bottom of 64x32 matrix. Single line, fits within bounds."""
+        status_text = status_text or ""
+        game = game or {}
+        h, w = self.matrix.image.height, self.matrix.image.width
+        tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
+        font_size = 5  # Size 5 fits MM/DD HH:MMa (12 chars) in 64px with margin
+        try:
+            status_font = ImageFont.truetype(tiny_font_path, font_size) if os.path.exists(tiny_font_path) else self.matrix.small_font
+        except Exception:
+            status_font = self.matrix.small_font
+        has_down = bool(down_distance and (game.get('is_live', False) or 'IN_PROGRESS' in (status_id or '')))
+        # Pick one line: down_distance for live football, else status
+        if has_down:
+            line = down_distance[:10]
+            color = (150, 255, 150)
+        elif status_text:
+            line, _ = self._format_sports_status_for_matrix(status_text, w, font_size)
+            color = (200, 200, 200)
+        else:
+            return
+        # Position 2 pixels higher to avoid bottom cutoff, keep bar at bottom
+        status_y = h - 6
+        bbox = self.matrix.draw.textbbox((0, 0), line, font=status_font)
+        tw = bbox[2] - bbox[0]
+        # Center with 1px margin each side to prevent edge clipping
+        x = (w - tw) // 2
+        x = max(1, min(x, w - tw - 1))
+        for ox, oy in [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]:
+            self.matrix.draw.text((x+ox, status_y+oy), line, font=status_font, fill=(0,0,0))
+        self.matrix.draw.text((x, status_y), line, font=status_font, fill=color)
+
     def display_sports(self):
         """Display sports mode with actual scores"""
         # Clear the image buffer completely before drawing
@@ -1548,7 +1711,7 @@ class DisplayController:
         if isinstance(sport, dict) and sport.get('is_favorites', False):
             # Display favorites - use cached data immediately for fast display
             current_time = time.time()
-            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            FAVORITES_CACHE_TTL = 30  # 30 seconds (maximum speed)
             
             # Always use cached data first for immediate display
             if (isinstance(self.favorites_cache, list) and 
@@ -1753,49 +1916,19 @@ class DisplayController:
                             game_date = datetime.fromisoformat(date_str.split('.')[0])
                         month = game_date.month
                         day = game_date.day
-                        date_display = f"{month}/{day}"
+                        date_display = f"{month:02d}/{day:02d}"  # MM/DD
                         hour = game_date.hour
                         minute = game_date.minute
-                        am_pm = "AM" if hour < 12 else "PM"
-                        hour_12 = hour % 12
-                        if hour_12 == 0:
-                            hour_12 = 12
-                        time_display = f"{hour_12}:{minute:02d}{am_pm}"
-                        status_text = f"{date_display}{time_display}"
+                        am_pm = "a" if hour < 12 else "p"
+                        hour_12 = (hour % 12) or 12
+                        time_display = f"{hour_12:02d}:{minute:02d}{am_pm}"  # HH:MM a/p
+                        status_text = f"{date_display} {time_display}"
                     except Exception as e:
                         logger.error(f"Error parsing date '{date_str}': {e}")
                         status_text = "SCHEDULED"
             
-            if status_text:
-                max_chars = 12 if ('/' in status_text and ('AM' in status_text or 'PM' in status_text)) else 8
-                if len(status_text) > max_chars:
-                    status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
-                status_y = self.matrix.image.height - 6
-                if self.matrix.draw:
-                    try:
-                        tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
-                        if os.path.exists(tiny_font_path):
-                            status_font = ImageFont.truetype(tiny_font_path, 6)
-                            bbox = self.matrix.draw.textbbox((0, 0), status_text, font=status_font)
-                            text_width = bbox[2] - bbox[0]
-                            status_x = (self.matrix.image.width - text_width) // 2
-                            outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                            for offset_x, offset_y in outline_offsets:
-                                self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text, 
-                                                     font=status_font, fill=(0, 0, 0))
-                            self.matrix.draw.text((status_x, status_y), status_text, font=status_font, fill=(200, 200, 200))
-                        else:
-                            status_font = self.matrix.font
-                            bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
-                            text_width = bbox[2] - bbox[0]
-                            status_x = (self.matrix.image.width - text_width) // 2
-                            outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                            for offset_x, offset_y in outline_offsets:
-                                self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
-                                                     font=status_font, fill=(0, 0, 0))
-                            self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
-                    except Exception as e:
-                        logger.debug(f"Error displaying status: {e}")
+            if status_text or game.get('down_distance_text'):
+                self._draw_sports_status_bar(status_text, game.get('down_distance_text', ''), status_id, game)
             
             self.matrix.update()
             return
@@ -1849,8 +1982,12 @@ class DisplayController:
                     has_live_games = True
                     break
         
-        # Update every 10 seconds for live games, 60 seconds otherwise
-        update_interval = 10 if has_live_games else 60
+        # SPORTS UPDATE INTERVALS (in seconds) - MAXIMUM SPEED
+        # ESPN free API is generally tolerant; don't go below 3 seconds
+        LIVE_GAME_UPDATE_INTERVAL = 3     # Update every 3 seconds for live games
+        IDLE_GAME_UPDATE_INTERVAL = 15    # Update every 15 seconds when no live games
+        
+        update_interval = LIVE_GAME_UPDATE_INTERVAL if has_live_games else IDLE_GAME_UPDATE_INTERVAL
         
         # Check if we need to fetch/refresh games for this sport
         games = self.sports_data_cache.get(sport_id, [])
@@ -2065,18 +2202,16 @@ class DisplayController:
                         else:
                             game_date = datetime.fromisoformat(date_str.split('.')[0])
                         
-                        # Format as compact "M/D H:MMAM/PM" (remove leading zeros, no space)
+                        # Format compact for 64x32: "M/D H:MM" (e.g. 1/28 7:30) - fits 9 chars
                         month = game_date.month
                         day = game_date.day
-                        date_display = f"{month}/{day}"  # No leading zeros
+                        date_display = f"{month:02d}/{day:02d}"  # MM/DD
                         hour = game_date.hour
                         minute = game_date.minute
-                        am_pm = "AM" if hour < 12 else "PM"
-                        hour_12 = hour % 12
-                        if hour_12 == 0:
-                            hour_12 = 12
-                        time_display = f"{hour_12}:{minute:02d}{am_pm}"
-                        status_text = f"{date_display}{time_display}"  # No space to save room
+                        am_pm = "a" if hour < 12 else "p"
+                        hour_12 = (hour % 12) or 12
+                        time_display = f"{hour_12:02d}:{minute:02d}{am_pm}"  # HH:MM a/p
+                        status_text = f"{date_display} {time_display}"
                         logger.debug(f"Formatted scheduled game time: {status_text}")
                     except Exception as e:
                         logger.error(f"Error parsing date '{date_str}': {e}")
@@ -2086,74 +2221,8 @@ class DisplayController:
                 if status_desc and status_desc not in ['Scheduled', 'In Progress', 'Final']:
                     status_text = status_desc
             
-            # Display status at top middle (y=1)
-            if status_text:
-                max_chars = 12 if ('/' in status_text and ('AM' in status_text or 'PM' in status_text)) else 8
-                if len(status_text) > max_chars:
-                    status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
-                # Position status text at bottom, below scores and logos
-                # Use larger font for better legibility
-                status_y = self.matrix.image.height - 6  # Slightly higher for larger font
-                try:
-                    # Try to use a slightly larger font (6 or 7 instead of 5)
-                    tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
-                    if os.path.exists(tiny_font_path):
-                        # Use size 6 for better legibility
-                        status_font = ImageFont.truetype(tiny_font_path, 6)
-                        bbox = self.matrix.draw.textbbox((0, 0), status_text, font=status_font)
-                        text_width = bbox[2] - bbox[0]
-                        status_x = (self.matrix.image.width - text_width) // 2
-                        # Draw outline (black) at 8 positions around the text
-                        outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                        for offset_x, offset_y in outline_offsets:
-                            self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text, 
-                                                 font=status_font, fill=(0, 0, 0))
-                        # Draw main text in gray on top
-                        self.matrix.draw.text((status_x, status_y), status_text, font=status_font, fill=(200, 200, 200))
-                    else:
-                        # Use regular font (not small) for better legibility
-                        status_font = self.matrix.font
-                        bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
-                        text_width = bbox[2] - bbox[0]
-                        status_x = (self.matrix.image.width - text_width) // 2
-                        # Draw outline (black) at 8 positions around the text
-                        outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                        for offset_x, offset_y in outline_offsets:
-                            self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
-                                                 font=status_font, fill=(0, 0, 0))
-                        # Draw main text in gray on top
-                        self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
-                except Exception as e:
-                    logger.debug(f"Error using font: {e}")
-                    # Fallback with regular font and outline
-                    status_font = self.matrix.font
-                    bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
-                    text_width = bbox[2] - bbox[0]
-                    status_x = (self.matrix.image.width - text_width) // 2
-                    # Draw outline (black) at 8 positions around the text
-                    outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                    for offset_x, offset_y in outline_offsets:
-                        self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
-                                             font=status_font, fill=(0, 0, 0))
-                    # Draw main text in gray on top
-                    self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
-            
-            # Bottom: Down & Distance (for live games)
-            down_distance = game.get('down_distance_text', '')
-            if down_distance and (game.get('is_live', False) or 'IN_PROGRESS' in status_id):
-                try:
-                    tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
-                    if os.path.exists(tiny_font_path):
-                        tiny_font = ImageFont.truetype(tiny_font_path, 5)
-                        bbox = self.matrix.draw.textbbox((0, 0), down_distance, font=tiny_font)
-                        text_width = bbox[2] - bbox[0]
-                        x = (self.matrix.image.width - text_width) // 2
-                        self.matrix.draw.text((x, 26), down_distance, font=tiny_font, fill=(150, 255, 150))
-                    else:
-                        self.matrix.draw_text(down_distance[:8], y=26, color=(150, 255, 150), small=True, center=True)
-                except Exception as e:
-                    logger.debug(f"Error displaying down & distance: {e}")
-                    self.matrix.draw_text(down_distance[:8], y=26, color=(150, 255, 150), small=True, center=True)
+            # Bottom bar: status (date/time/period) or down & distance - fits 64x32 matrix
+            self._draw_sports_status_bar(status_text, game.get('down_distance_text', ''), status_id, game)
         else:
             # No games available or current_game out of bounds - loop back to first game
             if games and len(games) > 0:
@@ -2853,8 +2922,10 @@ class DisplayController:
                 # Convert to RGB if needed
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                # Resize to fit display (64x32)
-                img = img.resize((self.matrix.width, self.matrix.height), Image.Resampling.LANCZOS)
+                # Resize with high-quality downsampling
+                img = self.matrix.resize_image_smooth(img, self.matrix.width, self.matrix.height)
+                # Optimize for LED matrix display (enhance contrast, sharpen, boost colors)
+                img = self.matrix.optimize_image_for_matrix(img, enhance_contrast=True, enhance_brightness=True, sharpen=True)
                 self.matrix.image = img
                 self.matrix.draw = ImageDraw.Draw(self.matrix.image)
                 self.matrix.update()
@@ -2897,8 +2968,10 @@ class DisplayController:
                     if frame.mode != 'RGB':
                         frame = frame.convert('RGB')
                     
-                    # Resize to fit display
-                    frame = frame.resize((self.matrix.width, self.matrix.height), Image.Resampling.LANCZOS)
+                    # Resize with high-quality downsampling
+                    frame = self.matrix.resize_image_smooth(frame, self.matrix.width, self.matrix.height)
+                    # Optimize for LED matrix (lighter optimization for GIFs to maintain smoothness)
+                    frame = self.matrix.optimize_image_for_matrix(frame, enhance_contrast=True, enhance_brightness=False, sharpen=False)
                     self.matrix.image = frame
                     self.matrix.draw = ImageDraw.Draw(self.matrix.image)
                     
@@ -2924,8 +2997,66 @@ class DisplayController:
         """Update display based on current mode"""
         current_time = time.time()
         
-        # Check for config reload request (every 2 seconds)
-        if current_time - self.last_config_check > 2.0:
+        # Check for immediate mode change request (checked every loop iteration for instant response)
+        if os.path.exists(self.mode_file):
+            try:
+                with open(self.mode_file, 'r') as f:
+                    new_mode = f.read().strip()
+                os.remove(self.mode_file)
+                
+                valid_modes = ['clock', 'sports', 'fantasy', 'stocks', 'weather', 'music', 'images', 'brightness']
+                if new_mode in valid_modes:
+                    self.current_mode = new_mode
+                    logger.info(f"Mode changed immediately to: {new_mode}")
+                    # Force immediate display update
+                    self.last_update = 0
+                else:
+                    logger.warning(f"Invalid mode requested: {new_mode}")
+            except Exception as e:
+                logger.error(f"Error processing mode change: {e}")
+        
+        # Check for immediate brightness change request (checked every loop iteration for instant response)
+        if os.path.exists(self.brightness_file):
+            try:
+                with open(self.brightness_file, 'r') as f:
+                    new_brightness = int(f.read().strip())
+                os.remove(self.brightness_file)
+                
+                if 0 <= new_brightness <= 100:
+                    self.matrix.set_brightness(new_brightness)
+                    self.config['brightness'] = new_brightness
+                    logger.info(f"Brightness changed immediately to: {new_brightness}")
+                else:
+                    logger.warning(f"Invalid brightness value: {new_brightness}")
+            except Exception as e:
+                logger.error(f"Error processing brightness change: {e}")
+        
+        # Check for navigation command (checked every loop iteration for instant response)
+        if os.path.exists(self.nav_file):
+            try:
+                with open(self.nav_file, 'r') as f:
+                    direction = f.read().strip()
+                os.remove(self.nav_file)
+                
+                # Handle navigation based on current mode
+                if direction == 'up':
+                    self._handle_nav_up()
+                elif direction == 'down':
+                    self._handle_nav_down()
+                elif direction == 'left':
+                    self._handle_nav_left()
+                elif direction == 'right':
+                    self._handle_nav_right()
+                else:
+                    logger.warning(f"Invalid navigation direction: {direction}")
+                
+                # Force immediate display update
+                self.last_update = 0
+            except Exception as e:
+                logger.error(f"Error processing navigation: {e}")
+        
+        # Check for config reload request (every 0.1 seconds for faster response)
+        if current_time - self.last_config_check > 0.1:
             self.last_config_check = current_time
             if os.path.exists(self.reload_file):
                 try:
