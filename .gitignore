@@ -61,3 +61,6 @@ token.pickle
 # System files
 *.service.bak
 
+
+# Vendored third-party C library (has its own .git, build artifact) - not ours to track
+rpi-rgb-led-matrix/

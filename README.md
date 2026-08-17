@@ -44,9 +44,14 @@ and restart policy with the live units before installation.
 ## Operation
 
 - Web configuration: `http://<PI_IP>:5000`
+- Mobile-friendly remote control: `http://<PI_IP>:5000/remote` (installable PWA)
 - Liveness: `GET /healthz` returns `{"status":"ok"}`
 - Logs: `sudo journalctl -u matrix-display -u web-config -f`
 - State: `systemctl status matrix-display web-config`
+
+Additional display modes beyond clock/weather/stocks: music playback controls,
+favorite-sports-teams tracking, and an image/GIF display mode with NCAA/NFL
+team logo assets.
 
 The web configurator is LAN-only. Do not expose it with router port forwarding;
 any remote administrative exposure must use the reviewed Cloudflare Access or

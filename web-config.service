@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=raspberrypi
-WorkingDirectory=/home/raspberrypi/matrix-display
+User=reekpi
+WorkingDirectory=/home/reekpi/matrix-display
 # Update this path if using virtual environment: /home/raspberrypi/matrix-display/venv/bin/python3
-ExecStart=/usr/bin/python3 /home/raspberrypi/matrix-display/web_config.py
+ExecStart=/usr/bin/python3 /home/reekpi/matrix-display/web_config.py
 Restart=always
 RestartSec=10
 StandardOutput=journal

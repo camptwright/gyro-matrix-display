@@ -109,149 +109,412 @@ HTML_TEMPLATE = """
     <title>Matrix Display Configuration</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent-primary: #6366f1;
+            --accent-secondary: #8b5cf6;
+            --accent-hover: #4f46e5;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --border: #475569;
+            --shadow: rgba(0, 0, 0, 0.3);
+        }
+        
+        body.light-mode {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8fafc;
+            --bg-tertiary: #e2e8f0;
+            --text-primary: #0f172a;
+            --text-secondary: #64748b;
+            --accent-primary: #6366f1;
+            --accent-secondary: #8b5cf6;
+            --accent-hover: #4f46e5;
+            --border: #cbd5e1;
+            --shadow: rgba(0, 0, 0, 0.1);
+        }
+        
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--bg-primary);
+            color: var(--text-primary);
             padding: 20px;
             min-height: 100vh;
+            transition: background 0.3s ease, color 0.3s ease;
         }
+        
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            padding: 30px;
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            box-shadow: 0 20px 60px var(--shadow);
+            padding: 40px;
+            border: 1px solid var(--border);
         }
-        h1 {
-            color: #333;
-            margin-bottom: 30px;
-            text-align: center;
-        }
-        .section {
-            margin-bottom: 40px;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 8px;
-        }
-        .section h2 {
-            color: #667eea;
-            margin-bottom: 15px;
-            font-size: 1.5em;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            color: #555;
-            font-weight: 500;
-        }
-        input, select {
-            width: 100%;
-            padding: 10px;
-            border: 2px solid #ddd;
-            border-radius: 5px;
-            font-size: 14px;
-        }
-        input:focus, select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        button {
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-right: 10px;
-            margin-top: 10px;
-        }
-        button:hover {
-            background: #5568d3;
-        }
-        button.danger {
-            background: #e74c3c;
-        }
-        button.danger:hover {
-            background: #c0392b;
-        }
-        .item-list {
-            margin-top: 15px;
-        }
-        .item {
-            background: white;
-            padding: 15px;
-            margin-bottom: 10px;
-            border-radius: 5px;
-            border: 1px solid #ddd;
+        
+        .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid var(--border);
         }
+        
+        h1 {
+            color: var(--text-primary);
+            font-size: 2.5em;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .theme-toggle {
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border);
+            color: var(--text-primary);
+            padding: 12px 24px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .theme-toggle:hover {
+            background: var(--accent-primary);
+            border-color: var(--accent-primary);
+            color: white;
+            transform: translateY(-2px);
+        }
+        
+        .section {
+            margin-bottom: 40px;
+            padding: 24px;
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            transition: all 0.3s ease;
+        }
+        
+        .section:hover {
+            border-color: var(--accent-primary);
+            box-shadow: 0 4px 20px var(--shadow);
+        }
+        
+        .section h2 {
+            color: var(--text-primary);
+            margin-bottom: 16px;
+            font-size: 1.75em;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-size: 0.95em;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+        
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+        
+        button {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            margin-right: 10px;
+            margin-top: 10px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button.danger {
+            background: linear-gradient(135deg, var(--danger), #dc2626);
+            box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+        }
+        
+        button.danger:hover {
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+        }
+        
+        .item-list {
+            margin-top: 16px;
+        }
+        
+        .item {
+            background: var(--bg-secondary);
+            padding: 16px;
+            margin-bottom: 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s ease;
+        }
+        
+        .item:hover {
+            border-color: var(--accent-primary);
+            transform: translateX(4px);
+        }
+        
         .item-info {
             flex: 1;
+            color: var(--text-primary);
         }
+        
         .item-actions {
             display: flex;
             gap: 10px;
         }
+        
         .brightness-control {
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 20px;
         }
+        
         .brightness-slider {
             flex: 1;
+            height: 8px;
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            outline: none;
+            -webkit-appearance: none;
         }
+        
+        .brightness-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        
+        .brightness-slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        
         .brightness-value {
-            font-size: 1.2em;
-            font-weight: bold;
-            color: #667eea;
-            min-width: 50px;
+            font-size: 1.4em;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            min-width: 60px;
+            text-align: right;
         }
+        
         .success {
-            background: #2ecc71;
+            background: linear-gradient(135deg, var(--success), #059669);
             color: white;
-            padding: 10px;
-            border-radius: 5px;
+            padding: 16px;
+            border-radius: 8px;
             margin-bottom: 20px;
             display: none;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
         }
+        
         .error {
-            background: #e74c3c;
+            background: linear-gradient(135deg, var(--danger), #dc2626);
             color: white;
-            padding: 10px;
-            border-radius: 5px;
+            padding: 16px;
+            border-radius: 8px;
             margin-bottom: 20px;
             display: none;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        
+        .mode-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+        
+        .mode-grid button {
+            margin: 0;
+            padding: 16px;
+            font-size: 16px;
+        }
+        
+        .nav-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 90px);
+            gap: 8px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        
+        .nav-grid button {
+            margin: 0;
+            padding: 20px;
+            font-size: 24px;
+        }
+        
+        .nav-center {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            letter-spacing: 1px;
+        }
+        
+        .info-text {
+            font-size: 0.9em;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+            line-height: 1.6;
+        }
+        
+        .save-button {
+            background: linear-gradient(135deg, var(--success), #059669);
+            font-size: 18px;
+            padding: 18px 40px;
+            box-shadow: 0 4px 16px rgba(16, 185, 129, 0.3);
+        }
+        
+        .save-button:hover {
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🎮 Matrix Display Configuration</h1>
+        <div class="header">
+            <h1>🎮 Matrix Display</h1>
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span id="themeIcon">🌙</span>
+                <span id="themeText">Dark Mode</span>
+            </button>
+        </div>
         
         <div id="message"></div>
         
+        <!-- Quick Mode Control -->
+        <div class="section">
+            <h2>⚡ Quick Mode Control</h2>
+            <p class="info-text">
+                Instantly switch display modes with these quick buttons.
+            </p>
+            <div class="mode-grid">
+                <button onclick="changeMode('clock')">🕐 Clock</button>
+                <button onclick="changeMode('sports')">🏈 Sports</button>
+                <button onclick="changeMode('fantasy')">⭐ Fantasy</button>
+                <button onclick="changeMode('stocks')">📈 Stocks</button>
+                <button onclick="changeMode('weather')">🌤️ Weather</button>
+                <button onclick="changeMode('music')">🎵 Music</button>
+                <button onclick="changeMode('images')">🖼️ Images</button>
+            </div>
+        </div>
+        
+        <!-- Navigation Control -->
+        <div class="section">
+            <h2>🎮 Navigation Control</h2>
+            <p class="info-text">
+                Navigate within the current mode:
+            </p>
+            <div class="info-text" style="font-size: 0.85em; line-height: 1.8;">
+                <strong>Sports:</strong> ↕️ Switch sports, ↔️ Switch games<br>
+                <strong>Stocks:</strong> ↕️ Toggle stocks/crypto, ↔️ Navigate tickers<br>
+                <strong>Images:</strong> ↕️ Toggle photos/GIFs, ↔️ Navigate images<br>
+                <strong>Fantasy:</strong> ↕️ Switch sports, ↔️ Navigate players<br>
+                <strong>Weather:</strong> ↕️ Switch locations<br>
+                <strong>Clock:</strong> ↕️ Switch time zones
+            </div>
+            <div class="nav-grid">
+                <div></div>
+                <button onclick="navigate('up')">⬆️</button>
+                <div></div>
+                <button onclick="navigate('left')">⬅️</button>
+                <div class="nav-center">NAV</div>
+                <button onclick="navigate('right')">➡️</button>
+                <div></div>
+                <button onclick="navigate('down')">⬇️</button>
+                <div></div>
+            </div>
+        </div>
+        
         <!-- Brightness Control -->
         <div class="section">
-            <h2>Brightness</h2>
+            <h2>💡 Brightness</h2>
             <div class="brightness-control">
                 <label>Brightness Level:</label>
                 <input type="range" id="brightness" min="0" max="100" value="{{ brightness }}" 
-                       class="brightness-slider" oninput="updateBrightness(this.value)">
+                       class="brightness-slider" oninput="updateBrightnessSlider(this.value)" 
+                       onchange="setBrightnessInstant(this.value)">
                 <span class="brightness-value" id="brightnessValue">{{ brightness }}%</span>
             </div>
         </div>
         
         <!-- Clock Locations -->
         <div class="section">
-            <h2>Clock Locations (Time Zones)</h2>
+            <h2>🕐 Clock Locations (Time Zones)</h2>
             <div class="form-group">
                 <label>Location Name:</label>
                 <input type="text" id="clockName" placeholder="e.g., New York">
@@ -275,7 +538,7 @@ HTML_TEMPLATE = """
         
         <!-- Sports -->
         <div class="section">
-            <h2>Sports</h2>
+            <h2>🏈 Sports</h2>
             <div class="form-group">
                 <label>Sport Name:</label>
                 <input type="text" id="sportName" placeholder="e.g., NBA, NFL, MLB">
@@ -290,8 +553,8 @@ HTML_TEMPLATE = """
         
         <!-- Favorite Teams -->
         <div class="section">
-            <h2>Favorite Sports Teams</h2>
-            <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
+            <h2>⭐ Favorite Sports Teams</h2>
+            <p class="info-text">
                 Add your favorite teams to see their games first in sports mode. Games involving your favorite teams will be shown in a separate "Favorites" section.
             </p>
             <div class="form-group">
@@ -315,14 +578,14 @@ HTML_TEMPLATE = """
         
         <!-- Fantasy Players -->
         <div class="section">
-            <h2>Fantasy Players</h2>
+            <h2>🏆 Fantasy Players</h2>
             <div class="form-group">
                 <label>
                     <input type="checkbox" id="fantasyEnabled" onchange="updateFantasyEnabled()">
                     Enable Fantasy Mode
                 </label>
             </div>
-            <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
+            <p class="info-text">
                 Add players to track their stats in fantasy mode. Supports NFL, NBA, and NHL. Use up/down flicks to cycle through sports, left/right to navigate players within each sport.
             </p>
             <div class="form-group">
@@ -347,7 +610,7 @@ HTML_TEMPLATE = """
         
         <!-- Stocks -->
         <div class="section">
-            <h2>Stocks</h2>
+            <h2>📈 Stocks</h2>
             <div class="form-group">
                 <label>
                     <input type="checkbox" id="stocksEnabled" onchange="updateStocksEnabled()">
@@ -364,7 +627,7 @@ HTML_TEMPLATE = """
         
         <!-- Crypto -->
         <div class="section">
-            <h2>Cryptocurrency</h2>
+            <h2>₿ Cryptocurrency</h2>
             <div class="form-group">
                 <label>Crypto Ticker:</label>
                 <input type="text" id="cryptoTicker" placeholder="e.g., BTC, ETH, DOGE" style="text-transform: uppercase;">
@@ -375,7 +638,7 @@ HTML_TEMPLATE = """
         
         <!-- Weather Locations -->
         <div class="section">
-            <h2>Weather Locations</h2>
+            <h2>🌤️ Weather Locations</h2>
             <div class="form-group">
                 <label>
                     <input type="checkbox" id="weatherEnabled" onchange="updateWeatherEnabled()">
@@ -404,7 +667,7 @@ HTML_TEMPLATE = """
         
         <!-- Music Configuration -->
         <div class="section">
-            <h2>Music (Spotify/YouTube Music)</h2>
+            <h2>🎵 Music (Spotify/YouTube Music)</h2>
             <div class="form-group">
                 <label>
                     <input type="checkbox" id="musicEnabled" onchange="updateMusicEnabled()">
@@ -422,15 +685,15 @@ HTML_TEMPLATE = """
                 <label>Polling Interval (seconds):</label>
                 <input type="number" id="musicPollingInterval" min="1" max="10" value="2">
             </div>
-            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
-                Note: Spotify credentials must be configured in <code>config/config_secrets.json</code>
+            <p class="info-text" style="margin-top: 10px;">
+                Note: Spotify credentials must be configured in <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px; font-size: 0.9em;">config/config_secrets.json</code>
             </p>
         </div>
         
         <!-- Images/GIFs Upload -->
         <div class="section">
-            <h2>Images & GIFs</h2>
-            <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
+            <h2>🖼️ Images & GIFs</h2>
+            <p class="info-text">
                 Upload photos (PNG, JPG, JPEG) or GIFs to display on the matrix. Use up/down gestures to switch between photos and GIFs, and left/right to navigate through the list.
             </p>
             
@@ -460,8 +723,8 @@ HTML_TEMPLATE = """
             </div>
         </div>
         
-        <div style="text-align: center; margin-top: 30px;">
-            <button onclick="saveConfig()" style="background: #2ecc71; font-size: 16px; padding: 15px 30px;">
+        <div style="text-align: center; margin-top: 40px;">
+            <button onclick="saveConfig()" class="save-button">
                 💾 Save Configuration
             </button>
         </div>
@@ -469,6 +732,35 @@ HTML_TEMPLATE = """
     
     <script>
         let config = {{ config_json|safe }};
+        
+        // Theme management
+        function toggleTheme() {
+            const body = document.body;
+            const themeIcon = document.getElementById('themeIcon');
+            const themeText = document.getElementById('themeText');
+            
+            if (body.classList.contains('light-mode')) {
+                body.classList.remove('light-mode');
+                themeIcon.textContent = '🌙';
+                themeText.textContent = 'Dark Mode';
+                localStorage.setItem('theme', 'dark');
+            } else {
+                body.classList.add('light-mode');
+                themeIcon.textContent = '☀️';
+                themeText.textContent = 'Light Mode';
+                localStorage.setItem('theme', 'light');
+            }
+        }
+        
+        // Load saved theme preference
+        function loadTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'light') {
+                document.body.classList.add('light-mode');
+                document.getElementById('themeIcon').textContent = '☀️';
+                document.getElementById('themeText').textContent = 'Light Mode';
+            }
+        }
         
         function showMessage(text, isError = false) {
             const msg = document.getElementById('message');
@@ -480,9 +772,64 @@ HTML_TEMPLATE = """
             }, 3000);
         }
         
-        function updateBrightness(value) {
+        function updateBrightnessSlider(value) {
             document.getElementById('brightnessValue').textContent = value + '%';
             config.brightness = parseInt(value);
+        }
+        
+        async function setBrightnessInstant(value) {
+            try {
+                const response = await fetch('/api/brightness/set', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ brightness: parseInt(value) })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    showMessage(`Brightness set to ${value}%`);
+                } else {
+                    showMessage('Error setting brightness: ' + result.error, true);
+                }
+            } catch (error) {
+                showMessage('Error setting brightness: ' + error, true);
+            }
+        }
+        
+        async function changeMode(mode) {
+            try {
+                const response = await fetch('/api/mode/change', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: mode })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    showMessage(`Mode changed to: ${mode}`);
+                } else {
+                    showMessage('Error changing mode: ' + result.error, true);
+                }
+            } catch (error) {
+                showMessage('Error changing mode: ' + error, true);
+            }
+        }
+        
+        async function navigate(direction) {
+            try {
+                const response = await fetch('/api/navigate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ direction: direction })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    // Don't show toast for navigation - too frequent
+                    console.log(`Navigated: ${direction}`);
+                } else {
+                    showMessage('Error navigating: ' + result.error, true);
+                }
+            } catch (error) {
+                showMessage('Error navigating: ' + error, true);
+            }
         }
         
         function updateMusicEnabled() {
@@ -1020,6 +1367,7 @@ HTML_TEMPLATE = """
         }
         
         // Initialize
+        loadTheme();
         renderLists();
         loadImageLists();
     </script>
@@ -1027,6 +1375,26 @@ HTML_TEMPLATE = """
 </html>
 """
 
+
+REMOTE_APP_PATH = os.path.join(_script_dir, 'matrix-display-remote', 'index.html')
+
+@app.route('/remote')
+def remote_app():
+    """Mobile-friendly remote control (use matrix-display.local:5000/remote)"""
+    if os.path.exists(REMOTE_APP_PATH):
+        with open(REMOTE_APP_PATH, 'r', encoding='utf-8') as f:
+            return f.read()
+    return "<h1>Remote app not found</h1><p>Ensure matrix-display-remote/index.html exists.</p>", 404
+
+@app.route('/manifest.json')
+def remote_manifest():
+    """PWA manifest for Add to Home Screen"""
+    manifest_path = os.path.join(_script_dir, 'matrix-display-remote', 'manifest.json')
+    if os.path.exists(manifest_path):
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            from flask import Response
+            return Response(f.read(), mimetype='application/json')
+    return jsonify({"name": "Matrix Remote"}), 404
 
 @app.route('/healthz')
 def healthz():
@@ -1192,6 +1560,97 @@ def delete_image(type, filename):
             return jsonify({"success": True})
         else:
             return jsonify({"success": False, "error": "File not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/mode/change', methods=['POST'])
+def change_mode():
+    """Immediately change the display mode without full config reload"""
+    try:
+        data = request.json
+        mode = data.get('mode')
+        
+        if not mode:
+            return jsonify({"success": False, "error": "Mode parameter required"}), 400
+        
+        # Valid modes
+        valid_modes = ['clock', 'sports', 'fantasy', 'stocks', 'weather', 'music', 'images', 'brightness']
+        if mode not in valid_modes:
+            return jsonify({"success": False, "error": f"Invalid mode. Must be one of: {', '.join(valid_modes)}"}), 400
+        
+        # Write mode change to a separate, high-priority file
+        mode_file = "/tmp/matrix_display_mode"
+        with open(mode_file, 'w') as f:
+            f.write(mode)
+        os.chmod(mode_file, 0o666)
+        
+        # Also trigger standard reload as backup
+        reload_file = "/tmp/matrix_display_reload"
+        with open(reload_file, 'w') as f:
+            f.write(str(time.time()))
+        os.chmod(reload_file, 0o666)
+        
+        return jsonify({"success": True, "mode": mode})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/brightness/set', methods=['POST'])
+def set_brightness():
+    """Immediately change the brightness without full config reload"""
+    try:
+        data = request.json
+        brightness = data.get('brightness')
+        
+        if brightness is None:
+            return jsonify({"success": False, "error": "Brightness parameter required"}), 400
+        
+        try:
+            brightness = int(brightness)
+            if brightness < 0 or brightness > 100:
+                return jsonify({"success": False, "error": "Brightness must be between 0 and 100"}), 400
+        except ValueError:
+            return jsonify({"success": False, "error": "Brightness must be a number"}), 400
+        
+        # Update config file with new brightness
+        config = load_config()
+        config['brightness'] = brightness
+        save_config(config)
+        
+        # Write brightness change to a separate file for immediate response
+        brightness_file = "/tmp/matrix_display_brightness"
+        with open(brightness_file, 'w') as f:
+            f.write(str(brightness))
+        os.chmod(brightness_file, 0o666)
+        
+        return jsonify({"success": True, "brightness": brightness})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/navigate', methods=['POST'])
+def navigate():
+    """Send navigation command (up/down/left/right) to the display"""
+    try:
+        data = request.json
+        direction = data.get('direction')
+        
+        if not direction:
+            return jsonify({"success": False, "error": "Direction parameter required"}), 400
+        
+        # Valid directions
+        valid_directions = ['up', 'down', 'left', 'right']
+        if direction not in valid_directions:
+            return jsonify({"success": False, "error": f"Invalid direction. Must be one of: {', '.join(valid_directions)}"}), 400
+        
+        # Write navigation command to a file for immediate response
+        nav_file = "/tmp/matrix_display_nav"
+        with open(nav_file, 'w') as f:
+            f.write(direction)
+        os.chmod(nav_file, 0o666)
+        
+        return jsonify({"success": True, "direction": direction})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

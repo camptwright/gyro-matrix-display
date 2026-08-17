@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Matrix Remote">
+  <title>Matrix Display Remote</title>
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0f172a;
+      --bg-card: #1e293b;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --text: #f1f5f9;
+      --text-dim: #94a3b8;
+      --border: #334155;
+      --success: #22c55e;
+      --danger: #ef4444;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      min-height: 100dvh;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+    }
+    .container { max-width: 480px; margin: 0 auto; padding: 16px; }
+    
+    header {
+      text-align: center; padding: 24px 0 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 { font-size: 1.5rem; font-weight: 600; }
+    .status {
+      font-size: 0.8rem; color: var(--text-dim); margin-top: 8px;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+    .status-dot.connected { background: var(--success); }
+    
+    .section {
+      background: var(--bg-card); border-radius: 12px;
+      padding: 20px; margin-top: 20px;
+      border: 1px solid var(--border);
+    }
+    .section h2 { font-size: 1rem; color: var(--text-dim); margin-bottom: 16px; font-weight: 500; }
+    
+    .mode-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .mode-btn {
+      aspect-ratio: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 4px;
+      background: var(--bg); border: 2px solid var(--border);
+      border-radius: 12px; color: var(--text);
+      font-size: 0.7rem; font-weight: 500; cursor: pointer;
+      transition: all 0.2s; -webkit-tap-highlight-color: transparent;
+    }
+    .mode-btn:hover, .mode-btn:active { border-color: var(--accent); background: rgba(99,102,241,0.15); }
+    .mode-btn .icon { font-size: 1.5rem; }
+    
+    .nav-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 8px; max-width: 160px; margin: 0 auto;
+    }
+    .nav-btn {
+      aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+      background: var(--bg); border: 2px solid var(--border);
+      border-radius: 10px; font-size: 1.5rem; cursor: pointer;
+      transition: all 0.2s; -webkit-tap-highlight-color: transparent;
+    }
+    .nav-btn:hover, .nav-btn:active { border-color: var(--accent); background: rgba(99,102,241,0.15); }
+    .nav-center { display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 0.75rem; }
+    
+    .brightness-row {
+      display: flex; align-items: center; gap: 16px; margin-top: 12px;
+    }
+    .brightness-slider {
+      flex: 1; height: 8px; -webkit-appearance: none; appearance: none;
+      background: var(--border); border-radius: 4px;
+    }
+    .brightness-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 24px; height: 24px;
+      border-radius: 50%; background: var(--accent); cursor: pointer;
+    }
+    .brightness-value { min-width: 40px; text-align: right; font-size: 0.9rem; color: var(--text-dim); }
+    
+    .full-config {
+      display: block; width: 100%; margin-top: 24px; padding: 12px;
+      background: var(--bg); border: 2px solid var(--border);
+      border-radius: 10px; color: var(--text); font-size: 0.9rem;
+      text-align: center; text-decoration: none; font-weight: 500;
+      transition: all 0.2s;
+    }
+    .full-config:hover { border-color: var(--accent); }
+    
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: var(--bg-card); padding: 12px 24px; border-radius: 8px;
+      border: 1px solid var(--border); font-size: 0.9rem;
+      opacity: 0; pointer-events: none; transition: opacity 0.3s;
+      z-index: 100;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Matrix Display Remote</h1>
+      <div class="status" id="status">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Connecting...</span>
+      </div>
+    </header>
+
+    <section class="section">
+      <h2>Mode</h2>
+      <div class="mode-grid">
+        <button class="mode-btn" data-mode="clock"><span class="icon">🕐</span>Clock</button>
+        <button class="mode-btn" data-mode="sports"><span class="icon">⚽</span>Sports</button>
+        <button class="mode-btn" data-mode="fantasy"><span class="icon">🏆</span>Fantasy</button>
+        <button class="mode-btn" data-mode="stocks"><span class="icon">📈</span>Stocks</button>
+        <button class="mode-btn" data-mode="weather"><span class="icon">🌤️</span>Weather</button>
+        <button class="mode-btn" data-mode="music"><span class="icon">🎵</span>Music</button>
+        <button class="mode-btn" data-mode="images"><span class="icon">🖼️</span>Images</button>
+        <button class="mode-btn" data-mode="brightness"><span class="icon">☀️</span>Bright</button>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Navigate</h2>
+      <div class="nav-grid">
+        <div></div>
+        <button class="nav-btn" data-dir="up">⬆️</button>
+        <div></div>
+        <button class="nav-btn" data-dir="left">⬅️</button>
+        <div class="nav-center">NAV</div>
+        <button class="nav-btn" data-dir="right">➡️</button>
+        <div></div>
+        <button class="nav-btn" data-dir="down">⬇️</button>
+        <div></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Brightness</h2>
+      <div class="brightness-row">
+        <input type="range" class="brightness-slider" id="brightness" min="0" max="100" value="50">
+        <span class="brightness-value" id="brightnessVal">50%</span>
+      </div>
+    </section>
+
+    <a href="/" class="full-config">Full Configuration →</a>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const API_BASE = '';  // Same origin when served from Pi at /remote
+    const statusEl = document.getElementById('statusText');
+    const statusDot = document.getElementById('statusDot');
+    const toastEl = document.getElementById('toast');
+
+    async function api(path, options = {}) {
+      const url = `${API_BASE}${path}`;
+      const res = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
+      return res.json();
+    }
+
+    async function checkConnection() {
+      try {
+        const data = await api('/api/config');
+        if (data && typeof data.brightness === 'number') {
+          statusEl.textContent = 'Connected';
+          statusDot.classList.add('connected');
+          document.getElementById('brightness').value = data.brightness;
+          document.getElementById('brightnessVal').textContent = data.brightness + '%';
+          return true;
+        }
+      } catch (e) {}
+      statusEl.textContent = 'Disconnected';
+      statusDot.classList.remove('connected');
+      return false;
+    }
+
+    function showToast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add('show');
+      setTimeout(() => toastEl.classList.remove('show'), 1500);
+    }
+
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const mode = btn.dataset.mode;
+        try {
+          const data = await api('/api/mode/change', { method: 'POST', body: JSON.stringify({ mode }) });
+          showToast(data.success ? mode : (data.error || 'Failed'));
+        } catch (e) { showToast('Connection error'); }
+      });
+    });
+
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const direction = btn.dataset.dir;
+        try {
+          const data = await api('/api/navigate', { method: 'POST', body: JSON.stringify({ direction }) });
+          showToast(data.success ? direction : (data.error || 'Failed'));
+        } catch (e) { showToast('Connection error'); }
+      });
+    });
+
+    const brightnessEl = document.getElementById('brightness');
+    const brightnessValEl = document.getElementById('brightnessVal');
+    let brightnessDebounce;
+    brightnessEl.addEventListener('input', () => {
+      const v = parseInt(brightnessEl.value);
+      brightnessValEl.textContent = v + '%';
+      clearTimeout(brightnessDebounce);
+      brightnessDebounce = setTimeout(async () => {
+        try {
+          await api('/api/brightness/set', { method: 'POST', body: JSON.stringify({ brightness: v }) });
+        } catch (e) {}
+      }, 150);
+    });
+
+    checkConnection();
+    setInterval(checkConnection, 10000);
+  </script>
+</body>
+</html>

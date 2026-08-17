@@ -30,6 +30,9 @@ MODES = ["clock", "sports", "fantasy", "stocks", "weather", "music", "images", "
 # Global display controller
 display_controller: DisplayController = None
 
+# BLE availability flag
+ble_available = True
+
 def ensure_display_controller():
     global display_controller
     if display_controller is None:
@@ -272,13 +275,18 @@ async def main():
             print("Bluetooth not available. Retrying in 5 seconds...")
             await asyncio.sleep(5)
         except Exception as e:
+            global ble_available
             error_msg = str(e)
             if 'bleak.backends.bluezdbus' in error_msg or 'No module named' in error_msg:
                 print("BLE backend not available. Controller connection disabled.")
                 print("The service runs as root, but bleak backend is not accessible.")
                 print("To fix: sudo pip3 install 'bleak[bluez]' --break-system-packages")
-                # Exit gracefully instead of retrying forever
-                return
+                print("Display will continue running without BLE controller support.")
+                print("You can still control the display via the web UI.")
+                # Mark BLE as unavailable and continue without it
+                ble_available = False
+                device = None
+                break
             else:
                 print(f"Error scanning: {e}. Retrying in 5 seconds...")
                 await asyncio.sleep(5)
@@ -318,6 +326,10 @@ async def main():
         while True:
             await asyncio.sleep(0.1)
             
+            # Skip BLE reconnection if backend is not available
+            if not ble_available:
+                continue
+            
             # Check connection every 5 seconds
             if time.time() - last_check > 5.0:
                 last_check = time.time()
@@ -325,7 +337,8 @@ async def main():
                     reconnect_in_progress = True
                     print(f"Connection lost. Reconnecting in {reconnect_delay:.1f}s...")
                     try:
-                        await client.disconnect()
+                        if client:
+                            await client.disconnect()
                     except:
                         pass
                     
@@ -368,7 +381,8 @@ async def main():
                         reconnect_in_progress = False
             
             # Check for stale data (no updates in 10 seconds) - but only warn once per 10 second period
-            if time.time() - last_data_time > 10.0:
+            # Skip this check if BLE is not available
+            if ble_available and time.time() - last_data_time > 10.0:
                 # Only print warning once, then reset to avoid spam
                 if not hasattr(main, '_last_warning_time'):
                     main._last_warning_time = 0
