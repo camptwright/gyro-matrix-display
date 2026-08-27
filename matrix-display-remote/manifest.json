@@ -1,0 +1,10 @@
+{
+  "name": "Matrix Display Remote",
+  "short_name": "Matrix Remote",
+  "description": "Control your LED matrix display",
+  "start_url": "/remote",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait"
+}

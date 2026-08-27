@@ -8,7 +8,7 @@ the display + exposes live remote-control actions (mode switching,
 in-mode navigation) that used to come from a BLE gyroscope remote.
 """
 
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, send_from_directory
 import json
 import os
 import sys
@@ -234,6 +234,23 @@ def control_action():
             return jsonify({"error": f"Unknown action: {action}"}), 400
         handler(controller)
         return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/control/brightness', methods=['POST'])
+def control_brightness():
+    """Sets an absolute brightness value (0-100) -- distinct from the
+    brightness_up/brightness_down step actions in CONTROL_ACTIONS, for a
+    slider UI that needs to land exactly where the user dragged it."""
+    try:
+        controller = _require_controller()
+        body = request.get_json(force=True, silent=True) or {}
+        value = max(0, min(100, int(body.get("brightness"))))
+        controller.config['brightness'] = value
+        controller.matrix.set_brightness(value)
+        controller.save_config()
+        return jsonify({"success": True, "brightness": value})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1305,9 +1322,24 @@ def healthz():
 def index():
     """Main configuration page"""
     config = load_config()
-    return render_template_string(HTML_TEMPLATE, 
+    return render_template_string(HTML_TEMPLATE,
                                  config_json=json.dumps(config),
                                  brightness=config.get('brightness', 50))
+
+
+_REMOTE_DIR = os.path.join(_script_dir, "matrix-display-remote")
+
+
+@app.route('/remote')
+def remote():
+    """Mobile-friendly PWA remote control (mode switching, navigation,
+    brightness) -- replaces the old BLE gyroscope remote."""
+    return send_from_directory(_REMOTE_DIR, "index.html")
+
+
+@app.route('/manifest.json')
+def remote_manifest():
+    return send_from_directory(_REMOTE_DIR, "manifest.json")
 
 
 @app.route('/api/config', methods=['GET'])

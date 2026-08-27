@@ -24,6 +24,11 @@ wheels/
 config/config.json
 config/config_secrets.json
 *.json.bak
+# Top-level (not config/) config.json - a real API key was accidentally
+# committed here once via this exact non-ignored path (web_config.py used to
+# resolve its config file here before it was fixed to use config/config.json
+# consistently). Block it outright so that mistake can't repeat.
+/config.json
 
 # Logs
 *.log

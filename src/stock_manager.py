@@ -664,9 +664,9 @@ class StockManager:
         current_data = self.stock_data[current_symbol]
         
         # Create display for current stock only (no scrolling, static display)
-            width = self.display_manager.matrix.width
-            height = self.display_manager.matrix.height
-        
+        width = self.display_manager.matrix.width
+        height = self.display_manager.matrix.height
+
         # Clear the display if requested
         if force_clear:
             self.display_manager.clear()

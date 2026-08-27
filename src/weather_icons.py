@@ -1,8 +1,7 @@
+import math
 import os
 from typing import Union
 from PIL import Image, ImageDraw
-# math is no longer needed for drawing, remove if not used elsewhere
-# import math 
 
 class WeatherIcons:
     ICON_DIR = "assets/weather/"  # Path where PNG icons are stored

@@ -1,0 +1,35 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # This codebase has never been through a full lint pass (no existing
+      # ruff config), so a default `ruff check` is hundreds of pre-existing
+      # style findings deep - not a useful merge gate yet. Scope this to the
+      # rules that catch genuinely broken code (undefined names, syntax
+      # errors) instead of style. compileall below is the other half of
+      # that: real syntax errors, not just undefined-name references.
+      - name: Install Ruff
+        run: python -m pip install "ruff>=0.8,<1"
+
+      - name: Lint Python (undefined names / syntax errors only)
+        run: ruff check . --select E9,F821,F822,F823
+
+      - name: Compile Python
+        run: python -m compileall -q .
