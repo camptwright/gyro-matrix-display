@@ -1,35 +1,29 @@
 #!/usr/bin/env python3
 """
 Web Configuration Interface for Matrix Display
-Runs on localhost to configure favorites/areas for each mode
+
+Also owns the live DisplayController: this process is the single service
+that both edits persistent config (favorites, areas, toggles) and drives
+the display + exposes live remote-control actions (mode switching,
+in-mode navigation) that used to come from a BLE gyroscope remote.
 """
 
 from flask import Flask, render_template_string, request, jsonify
 import json
 import os
+import sys
+import threading
 import time
 from pathlib import Path
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-# Make config path absolute - try to use same directory as matrix_display_controller.py
-# First try to find matrix_display_controller.py and use its directory
+# Absolute path, but the same "config/config.json" convention ConfigManager
+# (src/config_manager.py) uses by default -- matrix_display_controller.py's
+# DisplayController and this file must agree on one config file now that
+# they share a process.
 _script_dir = os.path.dirname(os.path.abspath(__file__))
-# Check if we're in the matrix-display directory
-if os.path.basename(_script_dir) == 'matrix-display' or os.path.exists(os.path.join(_script_dir, 'matrix_display_controller.py')):
-    CONFIG_FILE = os.path.join(_script_dir, "config.json")
-else:
-    # Fallback: try common locations
-    possible_paths = [
-        "/home/raspberrypi/matrix-display/config.json",
-        os.path.join(_script_dir, "config.json"),
-        "config.json"
-    ]
-    CONFIG_FILE = possible_paths[0]  # Default to Pi path
-    for path in possible_paths:
-        if os.path.exists(path) or os.path.exists(os.path.dirname(path)):
-            CONFIG_FILE = path
-            break
+CONFIG_FILE = os.path.join(_script_dir, "config", "config.json")
 
 print(f"Web config service using config file: {CONFIG_FILE}")
 
@@ -100,6 +94,148 @@ def save_config(config):
         import traceback
         traceback.print_exc()
         return False
+
+
+# ─── Live display control ──────────────────────────────────────────────────
+# Replaces the BLE gyroscope remote: this process now owns the running
+# DisplayController directly (formerly done by receiver.py, a separate
+# process with no connection to this one) and exposes its actions over
+# HTTP for the "Remote Control" panel in the web UI.
+
+try:
+    from matrix_display_controller import DisplayController
+except ImportError:
+    DisplayController = None
+    print("Warning: Could not import DisplayController; live control disabled")
+
+display_controller: "DisplayController | None" = None
+
+
+def start_display_controller():
+    """Create the DisplayController and run its update loop in a background
+    thread. Mirrors receiver.py's old ensure_display_controller()."""
+    global display_controller
+    if DisplayController is None:
+        return
+    if display_controller is not None:
+        return
+    try:
+        display_controller = DisplayController()
+
+        def run_display():
+            try:
+                display_controller.run()
+            except Exception as e:
+                print(f"Error in display loop: {e}")
+                import traceback
+                traceback.print_exc()
+
+        threading.Thread(target=run_display, daemon=True, name="display-update").start()
+        print("Display controller initialized and update loop started")
+    except Exception as e:
+        print(f"Error initializing display controller: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def _music_action(method_name):
+    def action(controller):
+        manager = getattr(controller, "music_manager", None)
+        if not manager:
+            raise RuntimeError("Music manager not available")
+        getattr(manager, method_name)()
+    return action
+
+
+# Every action the old BLE gesture handlers could trigger, keyed by an
+# explicit name instead of (mode, axis, direction) -- see receiver.py in
+# git history for the gesture-routing version this replaces.
+CONTROL_ACTIONS = {
+    "clock_prev_location": lambda c: c.prev_clock_location(),
+    "clock_next_location": lambda c: c.next_clock_location(),
+    "sports_prev_sport": lambda c: c.prev_sport(),
+    "sports_next_sport": lambda c: c.next_sport(),
+    "sports_prev_game": lambda c: c.prev_game(),
+    "sports_next_game": lambda c: c.next_game(),
+    "fantasy_prev_player": lambda c: c.prev_fantasy_player(),
+    "fantasy_next_player": lambda c: c.next_fantasy_player(),
+    "fantasy_prev_sport": lambda c: c.prev_fantasy_sport(),
+    "fantasy_next_sport": lambda c: c.next_fantasy_sport(),
+    "stocks_switch_submode": lambda c: c.switch_stocks_submode(),
+    "stocks_prev_ticker": lambda c: c.prev_ticker(),
+    "stocks_next_ticker": lambda c: c.next_ticker(),
+    "weather_prev_location": lambda c: c.prev_weather_location(),
+    "weather_next_location": lambda c: c.next_weather_location(),
+    "images_switch_list": lambda c: c.switch_image_list(),
+    "images_prev_image": lambda c: c.prev_image(),
+    "images_next_image": lambda c: c.next_image(),
+    "brightness_up": lambda c: c.brightness_up(),
+    "brightness_down": lambda c: c.brightness_down(),
+    "music_play_pause": _music_action("play_pause"),
+    "music_prev_track": _music_action("skip_previous"),
+    "music_next_track": _music_action("skip_next"),
+}
+
+
+def _require_controller():
+    if display_controller is None:
+        raise RuntimeError("Display controller is not running")
+    return display_controller
+
+
+@app.route('/api/control/state', methods=['GET'])
+def control_state():
+    try:
+        controller = _require_controller()
+        return jsonify({
+            "current_mode": controller.current_mode,
+            "modes": controller.modes,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route('/api/control/mode', methods=['POST'])
+def control_mode():
+    try:
+        controller = _require_controller()
+        body = request.get_json(force=True, silent=True) or {}
+        if "mode" in body:
+            mode = body["mode"]
+            if mode not in controller.modes:
+                return jsonify({"error": f"Unknown or disabled mode: {mode}"}), 400
+            controller.set_mode(mode)
+        elif "direction" in body:
+            raw = body["direction"]
+            if isinstance(raw, str):
+                direction = -1 if raw.lower() in ("prev", "previous", "-1") else 1
+            else:
+                direction = 1 if int(raw) >= 0 else -1
+            controller.cycle_mode(direction)
+        else:
+            return jsonify({"error": "Request must include 'mode' or 'direction'"}), 400
+
+        return jsonify({
+            "current_mode": controller.current_mode,
+            "modes": controller.modes,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/control/action', methods=['POST'])
+def control_action():
+    try:
+        controller = _require_controller()
+        body = request.get_json(force=True, silent=True) or {}
+        action = body.get("action")
+        handler = CONTROL_ACTIONS.get(action)
+        if handler is None:
+            return jsonify({"error": f"Unknown action: {action}"}), 400
+        handler(controller)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 HTML_TEMPLATE = """
@@ -230,14 +366,48 @@ HTML_TEMPLATE = """
             margin-bottom: 20px;
             display: none;
         }
+        .mode-buttons, .action-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .mode-buttons button {
+            margin: 0;
+        }
+        .mode-buttons button.active-mode {
+            background: #2ecc71;
+        }
+        .action-buttons {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #ddd;
+        }
+        .action-buttons button {
+            margin: 0;
+        }
+        .current-mode-label {
+            color: #555;
+            margin-bottom: 10px;
+        }
+        .current-mode-label strong {
+            color: #667eea;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎮 Matrix Display Configuration</h1>
-        
+
         <div id="message"></div>
-        
+
+        <!-- Remote Control (replaces the old BLE gyroscope remote) -->
+        <div class="section">
+            <h2>Remote Control</h2>
+            <p class="current-mode-label">Current mode: <strong id="currentModeLabel">—</strong></p>
+            <div class="mode-buttons" id="modeButtons"></div>
+            <div class="action-buttons" id="modeActions"></div>
+        </div>
+
         <!-- Brightness Control -->
         <div class="section">
             <h2>Brightness</h2>
@@ -484,7 +654,102 @@ HTML_TEMPLATE = """
             document.getElementById('brightnessValue').textContent = value + '%';
             config.brightness = parseInt(value);
         }
-        
+
+        // ─── Remote control (replaces the old BLE gyroscope remote) ───────
+        const MODE_LABELS = {
+            clock: 'Clock', sports: 'Sports', fantasy: 'Fantasy',
+            stocks: 'Stocks', weather: 'Weather', music: 'Music',
+            images: 'Images', brightness: 'Brightness'
+        };
+
+        const MODE_ACTIONS = {
+            clock: [['clock_prev_location', '◀ Prev Location'], ['clock_next_location', 'Next Location ▶']],
+            sports: [
+                ['sports_prev_sport', '◀ Prev Sport'], ['sports_next_sport', 'Next Sport ▶'],
+                ['sports_prev_game', '◀ Prev Game'], ['sports_next_game', 'Next Game ▶']
+            ],
+            fantasy: [
+                ['fantasy_prev_sport', '◀ Prev Sport'], ['fantasy_next_sport', 'Next Sport ▶'],
+                ['fantasy_prev_player', '◀ Prev Player'], ['fantasy_next_player', 'Next Player ▶']
+            ],
+            stocks: [
+                ['stocks_switch_submode', '⇄ Stocks / Crypto'],
+                ['stocks_prev_ticker', '◀ Prev Ticker'], ['stocks_next_ticker', 'Next Ticker ▶']
+            ],
+            weather: [['weather_prev_location', '◀ Prev Location'], ['weather_next_location', 'Next Location ▶']],
+            music: [
+                ['music_prev_track', '◀ Prev Track'], ['music_play_pause', '⏯ Play / Pause'],
+                ['music_next_track', 'Next Track ▶']
+            ],
+            images: [
+                ['images_switch_list', '⇄ Photos / GIFs'],
+                ['images_prev_image', '◀ Prev'], ['images_next_image', 'Next ▶']
+            ],
+            brightness: [['brightness_down', '− Dimmer'], ['brightness_up', '+ Brighter']],
+        };
+
+        function renderControlPanel(state) {
+            document.getElementById('currentModeLabel').textContent = MODE_LABELS[state.current_mode] || state.current_mode;
+
+            const modeButtons = document.getElementById('modeButtons');
+            modeButtons.innerHTML = (state.modes || []).map(mode => {
+                const active = mode === state.current_mode ? 'active-mode' : '';
+                const label = MODE_LABELS[mode] || mode;
+                return `<button class="${active}" onclick="setDisplayMode('${mode}')">${label}</button>`;
+            }).join('');
+
+            const actions = MODE_ACTIONS[state.current_mode] || [];
+            document.getElementById('modeActions').innerHTML = actions.map(([action, label]) =>
+                `<button onclick="sendControlAction('${action}')">${label}</button>`
+            ).join('');
+        }
+
+        async function loadControlState() {
+            try {
+                const response = await fetch('/api/control/state');
+                const state = await response.json();
+                if (response.ok) {
+                    renderControlPanel(state);
+                }
+            } catch (e) {
+                console.error('Failed to load control state:', e);
+            }
+        }
+
+        async function setDisplayMode(mode) {
+            try {
+                const response = await fetch('/api/control/mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                const state = await response.json();
+                if (response.ok) {
+                    renderControlPanel(state);
+                } else {
+                    showMessage(state.error || 'Failed to change mode', true);
+                }
+            } catch (e) {
+                showMessage('Failed to change mode: ' + e, true);
+            }
+        }
+
+        async function sendControlAction(action) {
+            try {
+                const response = await fetch('/api/control/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action })
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    showMessage(result.error || 'Action failed', true);
+                }
+            } catch (e) {
+                showMessage('Action failed: ' + e, true);
+            }
+        }
+
         function updateMusicEnabled() {
             if (!config.music) {
                 config.music = {};
@@ -1022,6 +1287,8 @@ HTML_TEMPLATE = """
         // Initialize
         renderLists();
         loadImageLists();
+        loadControlState();
+        setInterval(loadControlState, 5000);
     </script>
 </body>
 </html>
@@ -1197,6 +1464,7 @@ def delete_image(type, filename):
 
 
 if __name__ == '__main__':
+    start_display_controller()
     print("Starting web configuration server on http://localhost:5000")
     print("Access from your Pi's IP address or localhost")
     app.run(host='0.0.0.0', port=5000, debug=False)

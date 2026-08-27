@@ -116,3 +116,33 @@ becomes a tainted K3s agent for unrelated workloads.
 - Do not join the Pi to K3s until the matrix display is verified working on the new network.
 - Do not expose the web configurator publicly until Cloudflare Tunnel + Access is configured.
 - Do not store secrets in this repo or in the systemd service files.
+
+## Pending: BLE gyro remote removal, services merged (not yet deployed)
+
+The gyro remote hardware no longer exists. This repo (camptwright checkout)
+has been refactored accordingly, but — same deployment-gap pattern as the
+rest of this file — none of it has reached the live Pi yet:
+
+```
+[ ] Deploy the updated web_config.py (owns DisplayController directly now,
+    exposes /api/control/state, /api/control/mode, /api/control/action)
+    and the new config/config.json path convention
+    (config/config.json, not top-level config.json — verify the live Pi's
+    actual config file location before overwriting anything; back it up
+    first, same as the Before-connecting-to-the-network step above).
+[ ] Install the updated matrix-display.service (now ExecStart's
+    web_config.py, no bluetooth.target dependency) with
+    `sudo systemctl daemon-reload && sudo systemctl restart matrix-display`.
+[ ] Stop and disable the old web-config.service, then delete its unit file:
+    `sudo systemctl stop web-config && sudo systemctl disable web-config &&
+    sudo rm /etc/systemd/system/web-config.service`.
+[ ] Confirm receiver.py is no longer referenced by any live unit before
+    removing it from the Pi's checkout (it was the old matrix-display.service
+    ExecStart target).
+[ ] Verify mode switching and in-mode navigation work from the web UI's
+    "Remote Control" panel post-deploy — this is now the *only* way to
+    control the display, so a regression here means the display gets stuck
+    on whatever mode it was last in.
+[ ] Remove `bleak` from the Pi's installed packages once verified (optional
+    cleanup, not required for correctness).
+```

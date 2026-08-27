@@ -1,16 +1,14 @@
 [Unit]
-Description=Matrix Display Controller with Gyroscopic Control
-After=network.target bluetooth.target
-Wants=bluetooth.target
+Description=Matrix Display Controller + Web UI
+After=network.target
 
 [Service]
 Type=simple
-# Run as user to access user-installed packages (like bleak)
 User=raspberrypi
 Group=raspberrypi
 WorkingDirectory=/home/raspberrypi/matrix-display
 # Update this path if using virtual environment: /home/raspberrypi/matrix-display/venv/bin/python3
-ExecStart=/usr/bin/python3 /home/raspberrypi/matrix-display/receiver.py
+ExecStart=/usr/bin/python3 /home/raspberrypi/matrix-display/web_config.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -32,4 +30,3 @@ Environment=USER=raspberrypi
 
 [Install]
 WantedBy=multi-user.target
-

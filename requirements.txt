@@ -17,9 +17,6 @@ python-engineio
 websockets
 websocket-client
 
-# BLE support for gyro controller
-bleak>=0.21.0
-
 # RGB Matrix library (install separately on Pi)
 # rpi-rgb-led-matrix
 # See installation instructions in README
