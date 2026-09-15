@@ -10,6 +10,8 @@ import logging
 import sys
 import json
 import os
+import io
+import threading
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -78,6 +80,13 @@ class MatrixDisplay:
         self.image = None
         self.draw = None
         self.brightness = config.get('brightness', 50)
+        # Live web preview: the exact frame last pushed toward the real
+        # panel, copied out in update() below so the dashboard can serve
+        # it as a PNG without touching the offscreen canvas the hardware
+        # library owns. Lock guards the copy against a torn read while a
+        # new frame is being written - cheap since frames are tiny (64x32).
+        self.last_frame = None
+        self.last_frame_lock = threading.Lock()
         self._setup_matrix()
         self._load_fonts()
         
@@ -208,6 +217,14 @@ class MatrixDisplay:
             
     def update(self):
         """Update the display"""
+        # Captured first and unconditionally: this is the fully-drawn
+        # frame for this cycle regardless of whether the real hardware
+        # push below succeeds, so the web preview keeps working even if
+        # MATRIX_AVAILABLE is false or a real panel isn't attached.
+        if self.image:
+            with self.last_frame_lock:
+                self.last_frame = self.image.copy()
+
         if not self.matrix:
             logger.warning("Matrix not initialized, cannot update display")
             return
@@ -232,6 +249,20 @@ class MatrixDisplay:
             logger.error(f"Error updating display: {e}", exc_info=True)
             import traceback
             traceback.print_exc()
+
+    def get_preview_png(self, scale: int = 8) -> Optional[bytes]:
+        """PNG bytes of the last rendered frame, scaled up with nearest-
+        neighbor so individual LEDs stay crisp blocky squares instead of
+        blurring into a smooth (and misleading) image. Returns None if no
+        frame has been rendered yet."""
+        with self.last_frame_lock:
+            frame = self.last_frame.copy() if self.last_frame else None
+        if frame is None:
+            return None
+        scaled = frame.resize((frame.width * scale, frame.height * scale), Image.NEAREST)
+        buf = io.BytesIO()
+        scaled.save(buf, format='PNG')
+        return buf.getvalue()
                 
     def draw_text(self, text: str, x: int = None, y: int = None, 
                   color: tuple = (255, 255, 255), small: bool = False, center: bool = True, font=None, letter_spacing: int = 0):
@@ -296,7 +327,7 @@ class MatrixDisplay:
 class DisplayController:
     """Main display controller managing all modes"""
     
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = "config/config.json"):
         # Make config path absolute if relative (relative to script directory)
         if not os.path.isabs(config_path):
             script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -325,6 +356,30 @@ class DisplayController:
         self.current_mode = "clock"
         self.mode_index = 0
         self._build_modes_list()
+
+        # Auto-rotation between modes (clock/sports/stocks/weather/...).
+        # display.display_durations already existed in config as a
+        # per-mode seconds value (clock: 15, weather: 30, stocks: 30, ...)
+        # but nothing ever read it - modes only ever changed via a manual
+        # remote/API call. Mirrors the clock_locations auto-rotation
+        # pattern below.
+        import time as _time_mod
+        self.last_mode_rotation_time = _time_mod.time()
+        self.mode_display_durations = self.config.get('display', {}).get('display_durations', {})
+        self.default_mode_duration = 20
+
+        # Sub-item auto-rotation *within* a mode (weather locations,
+        # stock/crypto tickers, favorite games, photos/gifs) - previously
+        # only next/prev via remote control ever changed these; a mode
+        # just sat on index 0 forever otherwise. Each mode's own on-screen
+        # duration above is made dynamic (see _current_mode_duration) so a
+        # full lap through every configured item fits before the display
+        # moves to the next top-level mode, instead of truncating it.
+        self.item_rotation_seconds = self.config.get('display', {}).get('item_rotation_seconds', {})
+        self.last_weather_item_time = _time_mod.time()
+        self.last_stock_item_time = _time_mod.time()
+        self.last_sports_item_time = _time_mod.time()
+        self.last_image_item_time = _time_mod.time()
         
         # Clock state - handle timezone errors gracefully
         try:
@@ -339,6 +394,15 @@ class DisplayController:
             
         self.clock_locations = self.config.get('clock_locations', [])
         self.current_clock_location = 0
+        # Automatic rotation between clock_locations - manual next/prev via
+        # CONTROL_ACTIONS already worked on this index, but nothing ever
+        # synced it into clock_manager (a separate Clock instance that only
+        # reads config["timezone"] once at init), so the display never
+        # actually changed. Fixed in display_clock() below, which also
+        # drives this auto-advance.
+        import time as _time_mod
+        self.last_clock_rotation_time = _time_mod.time()
+        self.clock_rotation_interval = self.config.get('clock', {}).get('location_rotation_seconds', 8)
         
         # Sports state
         self.sports_list = self.config.get('sports', [])
@@ -352,8 +416,8 @@ class DisplayController:
         self.last_favorites_date_range_update = 0  # Track when we last fetched date ranges for favorites
         
         # Stocks state - separate stocks and crypto lists with sub-mode switching
-        self.stocks_list = self.config.get('stocks', [])
-        self.crypto_list = self.config.get('crypto', [])
+        self.stocks_list = self.config.get('stocks', {}).get('symbols', [])
+        self.crypto_list = self.config.get('crypto', {}).get('symbols', [])
         self.stocks_submode = "stocks"  # "stocks" or "crypto"
         self.current_stock_index = 0
         self.current_crypto_index = 0
@@ -486,15 +550,31 @@ class DisplayController:
                     def clear(self):
                         self.matrix.clear()
                     def draw_text(self, text, x=None, y=None, color=(255, 255, 255), font=None, **kwargs):
-                        # Convert font parameter to small flag for MatrixDisplay
-                        if font is None:
+                        # Two calling conventions land here. WeatherManager
+                        # passes an explicit font object and relies on this
+                        # wrapper's own centering; Clock passes a plain
+                        # small_font=True/False boolean and always
+                        # pre-computes its own absolute x for every call
+                        # (including its centered weekday line, which it
+                        # centers itself via its own width math before
+                        # calling here) - it never wants this wrapper's
+                        # additional center-within-remaining-space-from-x
+                        # recalculation layered on top. Both defaults below
+                        # used to silently do the wrong thing for every
+                        # Clock call: small_font landed unused in **kwargs
+                        # (always rendering the oversized regular font), and
+                        # center defaulted to True and re-centered text
+                        # Clock had already positioned exactly, overlapping
+                        # elements meant to sit side by side (time + AM/PM).
+                        is_clock_call = 'small_font' in kwargs
+                        if is_clock_call:
+                            small = bool(kwargs['small_font'])
+                        elif font is None:
                             small = False
                         else:
-                            # Check if font matches small or extra_small fonts
-                            small = (font == self.small_font or font == self.extra_small_font or 
+                            small = (font == self.small_font or font == self.extra_small_font or
                                     (hasattr(self.matrix, 'small_font') and font == self.matrix.small_font))
-                        # Extract center from kwargs if present, default True
-                        center = kwargs.get('center', True)
+                        center = kwargs.get('center', False if is_clock_call else True)
                         self.matrix.draw_text(text, x=x, y=y, color=color, small=small, center=center)
                     def update_display(self):
                         self.matrix.update()
@@ -513,6 +593,19 @@ class DisplayController:
                             use_font = font if font else self.matrix.font
                         bbox = self.matrix.draw.textbbox((0, 0), text, font=use_font)
                         return bbox[2] - bbox[0]
+                    def is_currently_scrolling(self):
+                        # This simpler MatrixDisplay wrapper has no scroll
+                        # animation or deferred-update queue - StockManager's
+                        # update_stock_data() only needs a real answer here to
+                        # decide whether to defer; "never scrolling" means it
+                        # always proceeds straight to the update, which is
+                        # correct for this wrapper.
+                        return False
+                    def defer_update(self, callback, priority=0):
+                        # No deferred-update queue exists on this wrapper -
+                        # only reachable if is_currently_scrolling() above
+                        # ever returned True, which it doesn't.
+                        callback()
                     @property
                     def width(self):
                         return self.matrix.width
@@ -557,8 +650,6 @@ class DisplayController:
             
         self.last_update = 0  # Initialize to 0 so first update happens immediately
         self.update_interval = 0.1  # Update every 0.1 seconds for smoother display and responsiveness
-        self.reload_file = "/tmp/matrix_display_reload"
-        self.last_config_check = time.time()
         
         # Preload favorites cache in background if favorite teams are configured
         if self.favorite_teams:
@@ -626,7 +717,7 @@ class DisplayController:
         """Reload configuration from file"""
         try:
             # Use the stored config path
-            config_path = getattr(self, 'config_path', "config.json")
+            config_path = getattr(self, "config_path", "config/config.json")
             if not os.path.isabs(config_path):
                 script_dir = os.path.dirname(os.path.abspath(__file__))
                 config_path = os.path.join(script_dir, config_path)
@@ -641,8 +732,8 @@ class DisplayController:
             if effective_list and self.current_sport >= len(effective_list):
                 self.current_sport = 0
                 self.current_game = 0
-            self.stocks_list = self.config.get('stocks', [])
-            self.crypto_list = self.config.get('crypto', [])
+            self.stocks_list = self.config.get('stocks', {}).get('symbols', [])
+            self.crypto_list = self.config.get('crypto', {}).get('symbols', [])
             # Reset indices if lists changed
             if self.current_stock_index >= len(self.stocks_list):
                 self.current_stock_index = 0
@@ -757,6 +848,7 @@ class DisplayController:
             # Rebuild modes list based on enabled flags
             old_modes = self.modes.copy()
             self._build_modes_list()
+            self.mode_display_durations = self.config.get('display', {}).get('display_durations', {})
             
             # If modes changed, adjust current mode if needed
             if old_modes != self.modes:
@@ -777,6 +869,12 @@ class DisplayController:
         except Exception as e:
             logger.error(f"Error reloading config: {e}")
             
+    def _item_interval(self, key: str, default: float) -> float:
+        """Seconds to show one item of a sub-rotated list (weather
+        location, ticker, game, photo/gif) before advancing to the next.
+        Config override lives at display.item_rotation_seconds.<key>."""
+        return self.item_rotation_seconds.get(key, default)
+
     def _build_modes_list(self):
         """Build the modes list based on enabled flags in config"""
         modes = ["clock", "sports"]  # Always enabled
@@ -812,17 +910,46 @@ class DisplayController:
             self.current_mode = "clock"
             self.mode_index = 0
     
+    def _reset_item_rotation(self, mode: str):
+        """Start a fresh, complete lap through a mode's own sub-items
+        (weather locations / tickers / games / photos-gifs) every time
+        that mode becomes active, so the dynamic duration computed in
+        _current_mode_duration() always covers item 0 through the end -
+        continuing from a stale mid-list index would risk showing some
+        items twice and others not at all within a single visit."""
+        now = time.time()
+        if mode == 'weather':
+            self.current_weather_location = 0
+            self.last_weather_item_time = now
+        elif mode == 'stocks':
+            self.current_stock_index = 0
+            self.current_crypto_index = 0
+            self.stocks_submode = "stocks"
+            self.last_stock_item_time = now
+        elif mode == 'sports':
+            self.current_sport = 0
+            self.current_game = 0
+            self.last_sports_item_time = now
+        elif mode == 'images':
+            self.current_image_list = "photos"
+            self.current_image_index = 0
+            self.last_image_item_time = now
+
     def set_mode(self, mode: str):
         """Set the current display mode"""
         if mode in self.modes:
             self.current_mode = mode
             self.mode_index = self.modes.index(mode)
+            self.last_mode_rotation_time = time.time()
+            self._reset_item_rotation(mode)
             logger.info(f"Mode changed to: {mode}")
             
     def cycle_mode(self, direction: int = 1):
         """Cycle to next/previous mode"""
         self.mode_index = (self.mode_index + direction) % len(self.modes)
         self.current_mode = self.modes[self.mode_index]
+        self.last_mode_rotation_time = time.time()
+        self._reset_item_rotation(self.current_mode)
         logger.info(f"Mode cycled to: {self.current_mode}")
         
     # Clock mode controls
@@ -1437,11 +1564,46 @@ class DisplayController:
         self.matrix.set_brightness(new_brightness)
         self.save_config()
         
+    def _resolve_current_clock_timezone(self):
+        """The timezone for whichever clock_locations entry is selected,
+        falling back to the single top-level config timezone when no
+        locations are configured."""
+        if self.clock_locations and self.current_clock_location < len(self.clock_locations):
+            location = self.clock_locations[self.current_clock_location]
+            if isinstance(location, dict):
+                tz_str = location.get("timezone", location.get("tz", ""))
+            elif isinstance(location, str):
+                tz_str = location
+            else:
+                tz_str = str(location)
+            if tz_str:
+                try:
+                    return pytz.timezone(tz_str)
+                except Exception as e:
+                    logger.warning(f"Invalid timezone '{tz_str}' for clock_locations[{self.current_clock_location}], using default: {e}")
+        return self.clock_timezone
+
     def display_clock(self):
         """Display clock mode"""
+        import time as _time_mod
+        just_rotated = False
+        if len(self.clock_locations) > 1:
+            elapsed = _time_mod.time() - self.last_clock_rotation_time
+            if elapsed >= self.clock_rotation_interval:
+                self.next_clock_location()
+                self.last_clock_rotation_time = _time_mod.time()
+                just_rotated = True
+
         if self.clock_manager:
             try:
-                self.clock_manager.display_time()
+                # Keep the shared Clock instance's timezone in sync with
+                # whichever clock_locations entry is currently selected -
+                # it has no other way to know this index exists.
+                self.clock_manager.timezone = self._resolve_current_clock_timezone()
+                # force_clear so the redraw isn't skipped by display_time()'s
+                # own change-detection on the rare chance the new zone's
+                # time/date string happens to match what was last drawn.
+                self.clock_manager.display_time(force_clear=just_rotated)
             except Exception as e:
                 logger.error(f"Error displaying clock: {e}")
                 # Fall through to fallback
@@ -1526,7 +1688,27 @@ class DisplayController:
         if self.matrix.image:
             self.matrix.image = Image.new('RGB', (self.matrix.image.width, self.matrix.image.height))
             self.matrix.draw = ImageDraw.Draw(self.matrix.image)
-        
+
+        now = time.time()
+        if now - self.last_sports_item_time >= self._item_interval('sports', 8):
+            # Set BEFORE calling next_game(): next_game() recursively
+            # calls display_sports() itself (for instant remote-control
+            # feedback), and that re-entrant call runs this same check
+            # again. Setting the timestamp first makes the re-entrant call
+            # see an unexpired timer and skip - without this, one real 8s
+            # tick spiraled into hundreds of advances within milliseconds.
+            self.last_sports_item_time = now
+            prev_game = self.current_game
+            self.next_game()
+            # Wrapped back to game 0 (or there was only ever one game) -
+            # also step to the next configured sport/favorites entry so a
+            # continuous cycle eventually shows every game AND every
+            # sport, not just the first sport's games forever.
+            if self.current_game <= prev_game:
+                effective_list_for_wrap = self._get_effective_sports_list()
+                if len(effective_list_for_wrap) > 1:
+                    self.next_sport()
+
         effective_list = self._get_effective_sports_list()
         logger.debug(f"display_sports: effective_list length={len(effective_list)}, current_sport={self.current_sport}")
         
@@ -1538,7 +1720,7 @@ class DisplayController:
         
         if not effective_list or len(effective_list) == 0:
             logger.warning(f"No sports configured: effective_list length={len(effective_list)}")
-            self.matrix.draw_text("NO SPORTS", y=10, color=(255, 0, 0))
+            self.matrix.draw_text("NO SPORTS", y=10, color=(255, 0, 0), small=True, center=True)
             self.matrix.update()
             return
             
@@ -1578,7 +1760,7 @@ class DisplayController:
                 fetch_thread.start()
             
             if not favorite_games or len(favorite_games) == 0:
-                self.matrix.draw_text("NO FAVORITES", y=10, color=(255, 255, 0))
+                self.matrix.draw_text("NO FAVS", y=10, color=(255, 255, 0), small=True, center=True)
                 self.matrix.update()
                 return
             
@@ -1594,7 +1776,7 @@ class DisplayController:
             
             logger.info(f"Displaying favorite game {self.current_game} of {len(favorite_games)} total favorite games (cache type: {type(self.favorites_cache)})")
             if len(favorite_games) == 0:
-                self.matrix.draw_text("NO FAVORITES", y=10, color=(255, 255, 0))
+                self.matrix.draw_text("NO FAVS", y=10, color=(255, 255, 0), small=True, center=True)
                 self.matrix.update()
                 return
             
@@ -1641,57 +1823,64 @@ class DisplayController:
             # Actually, I think the best approach is to extract the game display into a helper method
             # But for now, let's just inline it for favorites to get it working
             
-            # Display logos, teams, scores, status (same as regular sports - see code below)
-            center_y = self.matrix.image.height // 2
-            logo_size = 24
-            
+            # Display logos, teams, scores, status - same non-overlapping
+            # band layout as the regular (non-favorites) path above:
+            # y=0-6 team names, y=7-22 logos with score in the gap between
+            # them, y=23-31 status.
+            LOGO_SIZE = 16
+            LOGO_Y = 7
+
             if away_logo:
                 try:
-                    away_logo_resized = away_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-                    away_y = center_y - (logo_size // 2)
+                    away_logo_resized = away_logo.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
                     away_x = 0
                     if away_logo_resized.mode == 'RGBA':
-                        self.matrix.image.paste(away_logo_resized, (away_x, away_y), away_logo_resized)
+                        self.matrix.image.paste(away_logo_resized, (away_x, LOGO_Y), away_logo_resized)
                     else:
-                        self.matrix.image.paste(away_logo_resized, (away_x, away_y))
+                        self.matrix.image.paste(away_logo_resized, (away_x, LOGO_Y))
                 except Exception as e:
                     logger.error(f"Could not display away logo: {e}")
             if home_logo:
                 try:
-                    home_logo_resized = home_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-                    home_y = center_y - (logo_size // 2)
-                    home_x = self.matrix.image.width - logo_size
+                    home_logo_resized = home_logo.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
+                    home_x = self.matrix.image.width - LOGO_SIZE
                     if home_logo_resized.mode == 'RGBA':
-                        self.matrix.image.paste(home_logo_resized, (home_x, home_y), home_logo_resized)
+                        self.matrix.image.paste(home_logo_resized, (home_x, LOGO_Y), home_logo_resized)
                     else:
-                        self.matrix.image.paste(home_logo_resized, (home_x, home_y))
+                        self.matrix.image.paste(home_logo_resized, (home_x, LOGO_Y))
                 except Exception as e:
                     logger.error(f"Could not display home logo: {e}")
-            
+
             teams_text = f"{away} @ {home}"
             score_text = f"{away_score}-{home_score}"
-            
+
             if self.matrix.draw:
                 teams_font = self.matrix.small_font
                 bbox = self.matrix.draw.textbbox((0, 0), teams_text, font=teams_font)
                 text_width = bbox[2] - bbox[0]
                 teams_x = (self.matrix.image.width - text_width) // 2
-                teams_y = 2
+                teams_y = 0
                 outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
                 for offset_x, offset_y in outline_offsets:
-                    self.matrix.draw.text((teams_x + offset_x, teams_y + offset_y), teams_text, 
+                    self.matrix.draw.text((teams_x + offset_x, teams_y + offset_y), teams_text,
                                          font=teams_font, fill=(0, 0, 0))
                 self.matrix.draw.text((teams_x, teams_y), teams_text, font=teams_font, fill=(0, 255, 255))
-            
-            score_font = self.matrix.font
+
             if self.matrix.draw:
+                score_font = self.matrix.small_font
                 bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
                 text_width = bbox[2] - bbox[0]
+                if text_width > 30:
+                    tiny_score_path = "assets/fonts/PressStart2P-Regular.ttf"
+                    if os.path.exists(tiny_score_path):
+                        score_font = ImageFont.truetype(tiny_score_path, 5)
+                        bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
+                        text_width = bbox[2] - bbox[0]
                 score_x = (self.matrix.image.width - text_width) // 2
-                score_y = center_y - 2
+                score_y = LOGO_Y + (LOGO_SIZE - 7) // 2
                 outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
                 for offset_x, offset_y in outline_offsets:
-                    self.matrix.draw.text((score_x + offset_x, score_y + offset_y), score_text, 
+                    self.matrix.draw.text((score_x + offset_x, score_y + offset_y), score_text,
                                          font=score_font, fill=(0, 0, 0))
                 self.matrix.draw.text((score_x, score_y), score_text, font=score_font, fill=(255, 255, 0))
             
@@ -1761,7 +1950,7 @@ class DisplayController:
                         if hour_12 == 0:
                             hour_12 = 12
                         time_display = f"{hour_12}:{minute:02d}{am_pm}"
-                        status_text = f"{date_display}{time_display}"
+                        status_text = f"{date_display} {time_display}"
                     except Exception as e:
                         logger.error(f"Error parsing date '{date_str}': {e}")
                         status_text = "SCHEDULED"
@@ -1770,12 +1959,16 @@ class DisplayController:
                 max_chars = 12 if ('/' in status_text and ('AM' in status_text or 'PM' in status_text)) else 8
                 if len(status_text) > max_chars:
                     status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
-                status_y = self.matrix.image.height - 6
+                status_y = self.matrix.image.height - 8
                 if self.matrix.draw:
                     try:
-                        tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
+                        # 4x6-font.ttf is a real small bitmap font, not an 8x8
+                        # grid font shrunk down - PressStart2P at size 6 was
+                        # illegible enough to misread digits (e.g. "6" as "G",
+                        # confirmed live via /api/preview.png).
+                        tiny_font_path = "assets/fonts/4x6-font.ttf"
                         if os.path.exists(tiny_font_path):
-                            status_font = ImageFont.truetype(tiny_font_path, 6)
+                            status_font = ImageFont.truetype(tiny_font_path, 8)
                             bbox = self.matrix.draw.textbbox((0, 0), status_text, font=status_font)
                             text_width = bbox[2] - bbox[0]
                             status_x = (self.matrix.image.width - text_width) // 2
@@ -1925,74 +2118,83 @@ class DisplayController:
                 except Exception as e:
                     logger.error(f"Error loading home logo: {e}")
             
-            # Layout: Small logos on sides, team names and scores in center
-            # Top: Status (period/time/FINAL/Scheduled)
-            # Middle: Small logos on sides, team names and scores in center
-            # Bottom: Down & Distance (if live game)
-            
-            center_y = self.matrix.image.height // 2  # 16 for 32px height
-            
-            # Display larger logos on the sides (24x24 for better visibility)
-            logo_size = 24  # Increased from 20 for better visibility
+            # Layout, redesigned to give every element its own non-overlapping
+            # band (64x32 has no spare room to double up):
+            #   y=0-6:   team abbreviations, full width
+            #   y=7-22:  logos in the corners (16x16, not full-height) with
+            #            the score in the untouched gap between them
+            #   y=23-31: status (period/clock/FINAL/scheduled date+time, or
+            #            down & distance for a live game with one available)
+            # The old layout centered team names and score across the FULL
+            # 64px width while 24x24 logos sat at x=0 and x=40 - only a 16px
+            # gap remained between them, so anything wider than that (every
+            # real team-name pair, most scores) rendered directly on top of
+            # both logos. Confirmed live via /api/preview.png.
+            LOGO_SIZE = 16
+            LOGO_Y = 7
+
             if away_logo:
                 try:
-                    away_logo_resized = away_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-                    away_y = center_y - (logo_size // 2)  # Center vertically
+                    away_logo_resized = away_logo.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
                     away_x = 0  # At left edge
                     if away_logo_resized.mode == 'RGBA':
-                        self.matrix.image.paste(away_logo_resized, (away_x, away_y), away_logo_resized)
+                        self.matrix.image.paste(away_logo_resized, (away_x, LOGO_Y), away_logo_resized)
                     else:
-                        self.matrix.image.paste(away_logo_resized, (away_x, away_y))
+                        self.matrix.image.paste(away_logo_resized, (away_x, LOGO_Y))
                     logger.debug(f"Displayed away logo: {away}")
                 except Exception as e:
                     logger.error(f"Could not display away logo: {e}")
             if home_logo:
                 try:
-                    home_logo_resized = home_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-                    home_y = center_y - (logo_size // 2)  # Center vertically
-                    home_x = self.matrix.image.width - logo_size  # At right edge
+                    home_logo_resized = home_logo.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
+                    home_x = self.matrix.image.width - LOGO_SIZE  # At right edge
                     if home_logo_resized.mode == 'RGBA':
-                        self.matrix.image.paste(home_logo_resized, (home_x, home_y), home_logo_resized)
+                        self.matrix.image.paste(home_logo_resized, (home_x, LOGO_Y), home_logo_resized)
                     else:
-                        self.matrix.image.paste(home_logo_resized, (home_x, home_y))
+                        self.matrix.image.paste(home_logo_resized, (home_x, LOGO_Y))
                     logger.debug(f"Displayed home logo: {home}")
                 except Exception as e:
                     logger.error(f"Could not display home logo: {e}")
-            
-            # Display team names and scores in the center (with space for logos on sides)
+
+            # Team names and score in the center (with space for logos on sides)
             teams_text = f"{away} @ {home}"
             score_text = f"{away_score}-{home_score}"
-            
-            # Draw team names at top to avoid logo overlap, with distinct cyan color and outline
-            # Position slightly down (y=2) to prevent cutoff at top of screen
+
+            # Team names: full-width band above the logos - nothing else
+            # occupies y=0-6, so it can use the whole 64px with no overlap risk.
             if self.matrix.draw:
                 teams_font = self.matrix.small_font
                 bbox = self.matrix.draw.textbbox((0, 0), teams_text, font=teams_font)
                 text_width = bbox[2] - bbox[0]
                 teams_x = (self.matrix.image.width - text_width) // 2
-                teams_y = 2
-                # Draw outline (black) at 8 positions around the text
+                teams_y = 0
                 outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
                 for offset_x, offset_y in outline_offsets:
-                    self.matrix.draw.text((teams_x + offset_x, teams_y + offset_y), teams_text, 
+                    self.matrix.draw.text((teams_x + offset_x, teams_y + offset_y), teams_text,
                                          font=teams_font, fill=(0, 0, 0))
-                # Draw main text in cyan on top
                 self.matrix.draw.text((teams_x, teams_y), teams_text, font=teams_font, fill=(0, 255, 255))
-            
-            # Draw score in center with outline to prevent overlap with logos
-            # First draw black outline by drawing at multiple offsets
-            score_font = self.matrix.font  # Use regular font for scores
+
+            # Score: sits in the gap between the logos (x=16 to x=48, 32px).
+            # Centering on the FULL image width still lands inside that gap
+            # as long as the rendered text is <=32px wide, since the gap is
+            # itself centered on the same midpoint - shrink to the tiny font
+            # once a 3-digit score (e.g. "112-108") would run past that.
             if self.matrix.draw:
+                score_font = self.matrix.small_font
                 bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
                 text_width = bbox[2] - bbox[0]
+                if text_width > 30:
+                    tiny_score_path = "assets/fonts/PressStart2P-Regular.ttf"
+                    if os.path.exists(tiny_score_path):
+                        score_font = ImageFont.truetype(tiny_score_path, 5)
+                        bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
+                        text_width = bbox[2] - bbox[0]
                 score_x = (self.matrix.image.width - text_width) // 2
-                score_y = center_y - 2
-                # Draw outline (black) at 8 positions around the text
+                score_y = LOGO_Y + (LOGO_SIZE - 7) // 2
                 outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
                 for offset_x, offset_y in outline_offsets:
-                    self.matrix.draw.text((score_x + offset_x, score_y + offset_y), score_text, 
+                    self.matrix.draw.text((score_x + offset_x, score_y + offset_y), score_text,
                                          font=score_font, fill=(0, 0, 0))
-                # Draw main text in yellow on top
                 self.matrix.draw.text((score_x, score_y), score_text, font=score_font, fill=(255, 255, 0))
             
             # Top middle: Period/time/FINAL/Scheduled
@@ -2076,7 +2278,7 @@ class DisplayController:
                         if hour_12 == 0:
                             hour_12 = 12
                         time_display = f"{hour_12}:{minute:02d}{am_pm}"
-                        status_text = f"{date_display}{time_display}"  # No space to save room
+                        status_text = f"{date_display} {time_display}"
                         logger.debug(f"Formatted scheduled game time: {status_text}")
                     except Exception as e:
                         logger.error(f"Error parsing date '{date_str}': {e}")
@@ -2085,21 +2287,33 @@ class DisplayController:
                 status_desc = game.get('status', '')
                 if status_desc and status_desc not in ['Scheduled', 'In Progress', 'Final']:
                     status_text = status_desc
-            
+
+            # A live game's down & distance ("3RD & 7") is more specific and
+            # more useful than its bare period/clock, and the bottom band
+            # only has room for one line - show it in place of, not
+            # alongside, the period/clock status computed above. (The old
+            # code drew both status_text AND down_distance at the same
+            # y = height - 6, unconditionally on top of each other whenever
+            # both were present.)
+            down_distance = game.get('down_distance_text', '')
+            if down_distance and (game.get('is_live', False) or 'IN_PROGRESS' in status_id):
+                status_text = down_distance
+
             # Display status at top middle (y=1)
             if status_text:
                 max_chars = 12 if ('/' in status_text and ('AM' in status_text or 'PM' in status_text)) else 8
                 if len(status_text) > max_chars:
                     status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
                 # Position status text at bottom, below scores and logos
-                # Use larger font for better legibility
-                status_y = self.matrix.image.height - 6  # Slightly higher for larger font
+                status_y = self.matrix.image.height - 8
                 try:
-                    # Try to use a slightly larger font (6 or 7 instead of 5)
-                    tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
+                    # 4x6-font.ttf is a real small bitmap font, not an 8x8
+                    # grid font shrunk down - PressStart2P at size 6 was
+                    # illegible enough to misread digits (e.g. "6" as "G",
+                    # confirmed live via /api/preview.png).
+                    tiny_font_path = "assets/fonts/4x6-font.ttf"
                     if os.path.exists(tiny_font_path):
-                        # Use size 6 for better legibility
-                        status_font = ImageFont.truetype(tiny_font_path, 6)
+                        status_font = ImageFont.truetype(tiny_font_path, 8)
                         bbox = self.matrix.draw.textbbox((0, 0), status_text, font=status_font)
                         text_width = bbox[2] - bbox[0]
                         status_x = (self.matrix.image.width - text_width) // 2
@@ -2137,23 +2351,6 @@ class DisplayController:
                                              font=status_font, fill=(0, 0, 0))
                     # Draw main text in gray on top
                     self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
-            
-            # Bottom: Down & Distance (for live games)
-            down_distance = game.get('down_distance_text', '')
-            if down_distance and (game.get('is_live', False) or 'IN_PROGRESS' in status_id):
-                try:
-                    tiny_font_path = "assets/fonts/PressStart2P-Regular.ttf"
-                    if os.path.exists(tiny_font_path):
-                        tiny_font = ImageFont.truetype(tiny_font_path, 5)
-                        bbox = self.matrix.draw.textbbox((0, 0), down_distance, font=tiny_font)
-                        text_width = bbox[2] - bbox[0]
-                        x = (self.matrix.image.width - text_width) // 2
-                        self.matrix.draw.text((x, 26), down_distance, font=tiny_font, fill=(150, 255, 150))
-                    else:
-                        self.matrix.draw_text(down_distance[:8], y=26, color=(150, 255, 150), small=True, center=True)
-                except Exception as e:
-                    logger.debug(f"Error displaying down & distance: {e}")
-                    self.matrix.draw_text(down_distance[:8], y=26, color=(150, 255, 150), small=True, center=True)
         else:
             # No games available or current_game out of bounds - loop back to first game
             if games and len(games) > 0:
@@ -2178,14 +2375,29 @@ class DisplayController:
     def display_stocks(self):
         """Display stocks/crypto mode with actual prices"""
         self.matrix.clear()
-        
+
+        if (len(self.stocks_list) + len(self.crypto_list)) > 1:
+            now = time.time()
+            if now - self.last_stock_item_time >= self._item_interval('stocks', 6):
+                self.last_stock_item_time = now
+                current_list = self.stocks_list if self.stocks_submode == "stocks" else self.crypto_list
+                current_index = self.current_stock_index if self.stocks_submode == "stocks" else self.current_crypto_index
+                self.next_ticker()
+                # Wrapped back to the start of this list - move to the
+                # other one so a continuous cycle sees every stock AND
+                # every crypto, not just one list forever.
+                if current_list and current_index >= len(current_list) - 1:
+                    other_list = self.crypto_list if self.stocks_submode == "stocks" else self.stocks_list
+                    if other_list:
+                        self.switch_stocks_submode()
+
         # Get current ticker based on sub-mode
         if self.stocks_submode == "stocks":
             ticker_list = self.stocks_list
             current_index = self.current_stock_index
             if not ticker_list or current_index >= len(ticker_list):
                 logger.warning(f"No stocks configured or invalid index")
-                self.matrix.draw_text("NO STOCKS", y=10, color=(255, 0, 0))
+                self.matrix.draw_text("NO STOCKS", y=10, color=(255, 0, 0), small=True, center=True)
                 self.matrix.update()
                 return
             ticker = ticker_list[current_index]
@@ -2194,7 +2406,7 @@ class DisplayController:
             current_index = self.current_crypto_index
             if not ticker_list or current_index >= len(ticker_list):
                 logger.warning(f"No crypto configured or invalid index")
-                self.matrix.draw_text("NO CRYPTO", y=10, color=(255, 0, 0))
+                self.matrix.draw_text("NO CRYPTO", y=10, color=(255, 0, 0), small=True, center=True)
                 self.matrix.update()
                 return
             ticker = ticker_list[current_index]
@@ -2708,11 +2920,17 @@ class DisplayController:
     def display_weather(self):
         """Display weather mode with actual weather data"""
         self.matrix.clear()
-        
+
+        if len(self.weather_locations) > 1:
+            now = time.time()
+            if now - self.last_weather_item_time >= self._item_interval('weather', 6):
+                self.last_weather_item_time = now
+                self.next_weather_location()
+
         logger.debug(f"display_weather: weather_locations={self.weather_locations}, current_weather_location={self.current_weather_location}, len={len(self.weather_locations) if self.weather_locations else 0}")
         if not self.weather_locations or self.current_weather_location >= len(self.weather_locations):
             logger.warning(f"No weather locations configured or invalid index: weather_locations={self.weather_locations}, current_weather_location={self.current_weather_location}")
-            self.matrix.draw_text("NO WEATHER", y=10, color=(255, 0, 0))
+            self.matrix.draw_text("NO WEATHER", y=10, color=(255, 0, 0), small=True, center=True)
             self.matrix.update()
             return
             
@@ -2750,19 +2968,11 @@ class DisplayController:
             
             # Display location and temperature
             temp = data.get('temp', 0)
-            
-            # If icon available, show it on left side (larger for better visibility)
-            if icon:
-                try:
-                    icon = icon.resize((20, 20), Image.Resampling.LANCZOS)
-                    icon_y = (self.matrix.image.height - 20) // 2  # Center vertically
-                    self.matrix.image.paste(icon, (0, icon_y))
-                except:
-                    pass
-            
+
             # Line 1: Location name - handle long names better
             # For very long names, split into two lines or truncate intelligently
             max_chars_single = 10  # Max chars that fit on one line
+            location_is_split = len(location_name) > max_chars_single and len(location_name.split()) > 1 and len(location_name.split()[0]) <= max_chars_single
             if len(location_name) > max_chars_single:
                 # Try to split on space if possible
                 words = location_name.split()
@@ -2779,22 +2989,48 @@ class DisplayController:
             else:
                 # Center align for short names
                 self.matrix.draw_text(location_name, y=2, color=(0, 200, 255), small=True, center=True)
-            
-            # Line 2: Temperature - center aligned (adjust y based on whether location is split)
-            temp_y = 18 if len(location_name) <= max_chars_single else 16
+
+            # Icon + temp/condition share the remaining band below the
+            # location line, split into a left icon column and a right text
+            # column - not stacked full-width center-on-center, which is
+            # what previously left the icon and the temp/condition text each
+            # centered independently on the same 64px midpoint, wasting the
+            # space on the icon's side and never actually using the right
+            # edge (confirmed live via /api/preview.png: real gap past the
+            # temperature, every row optically left-of-center).
+            band_top = 15 if location_is_split else 8
+            icon_size = 22 if band_top <= 8 else 15
+            icon_x = 0
+
+            if icon:
+                try:
+                    icon_resized = icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+                    icon_y = band_top + (self.matrix.image.height - band_top - icon_size) // 2
+                    self.matrix.image.paste(icon_resized, (icon_x, icon_y))
+                except:
+                    pass
+
+            # Text column starts right after the icon and is centered within
+            # that remaining space (draw_text's x + center=True centers
+            # "from x to the right edge", not across the whole canvas) - so
+            # it fills the room the icon left behind instead of the strip
+            # down the middle of the whole display.
+            text_x = icon_size + 2
+            text_band_height = self.matrix.image.height - band_top
             temp_str = f"{temp}°F"
-            self.matrix.draw_text(temp_str, y=temp_y, color=(255, 255, 255), center=True)
-            
+            temp_y = band_top + max(0, (text_band_height - 17) // 2)
+            self.matrix.draw_text(temp_str, x=text_x, y=temp_y, color=(255, 255, 255), center=True)
+
             # Line 3: Condition - truncate intelligently
             max_cond_chars = 8
-            cond_y = 26 if len(location_name) <= max_chars_single else 24
+            cond_y = temp_y + 10
             if len(condition) > max_cond_chars:
                 # Truncate condition
                 cond_str = condition[:max_cond_chars]
-                self.matrix.draw_text(cond_str, y=cond_y, color=(200, 200, 255), small=True, center=True)
+                self.matrix.draw_text(cond_str, x=text_x, y=cond_y, color=(200, 200, 255), small=True, center=True)
             else:
                 # Center align for short conditions
-                self.matrix.draw_text(condition, y=cond_y, color=(200, 200, 255), small=True, center=True)
+                self.matrix.draw_text(condition, x=text_x, y=cond_y, color=(200, 200, 255), small=True, center=True)
         else:
             # No data available, just show location name
             self.matrix.draw_text(location_name[:8], y=10, color=(0, 200, 255))
@@ -2836,10 +3072,22 @@ class DisplayController:
     def display_images(self):
         """Display images/GIFs mode"""
         self.matrix.clear()
-        
+
+        if (len(self.photo_list) + len(self.gif_list)) > 1:
+            now = time.time()
+            if now - self.last_image_item_time >= self._item_interval('images', 6):
+                self.last_image_item_time = now
+                current_list = self.photo_list if self.current_image_list == "photos" else self.gif_list
+                current_index = self.current_image_index
+                self.next_image()
+                if current_list and current_index >= len(current_list) - 1:
+                    other_list = self.gif_list if self.current_image_list == "photos" else self.photo_list
+                    if other_list:
+                        self.switch_image_list()
+
         if self.current_image_list == "photos":
             if not self.photo_list:
-                self.matrix.draw_text("NO PHOTOS", y=10, color=(255, 255, 0))
+                self.matrix.draw_text("NO PHOTOS", y=10, color=(255, 255, 0), small=True, center=True)
                 self.matrix.update()
                 return
             
@@ -2920,23 +3168,51 @@ class DisplayController:
         self.matrix.draw_text(f"{brightness}%", y=20, color=(255, 255, 255), center=True)  # Regular font (not small)
         self.matrix.update()
         
+    def _current_mode_duration(self) -> float:
+        """How long the current mode stays on screen before auto-advancing.
+        For modes with their own sub-item rotation (weather locations,
+        stock/crypto tickers, favorite games, photos/gifs), this is
+        stretched to item_count * per-item interval so a full lap always
+        completes in one visit - otherwise a static duration could cut a
+        long list off partway through, defeating the point of rotating
+        sub-items at all. Falls back to the configured/static duration for
+        modes without sub-items (images/sports/etc. with 0-1 items too)."""
+        mode = self.current_mode
+        static = self.mode_display_durations.get(mode, self.default_mode_duration)
+        if mode == 'weather' and len(self.weather_locations) > 1:
+            return max(static, len(self.weather_locations) * self._item_interval('weather', 6))
+        if mode == 'stocks':
+            n = len(self.stocks_list) + len(self.crypto_list)
+            if n > 1:
+                return max(static, n * self._item_interval('stocks', 6))
+        if mode == 'sports' and len(self.favorites_cache) > 1:
+            return max(static, len(self.favorites_cache) * self._item_interval('sports', 8))
+        if mode == 'images':
+            n = len(self.photo_list) + len(self.gif_list)
+            if n > 1:
+                return max(static, n * self._item_interval('images', 6))
+        return static
+
     def update(self):
         """Update display based on current mode"""
+        # Config reload used to be signaled via a polled trigger file, back
+        # when web_config.py and this controller were separate processes.
+        # They share one process now - web_config.py's save/upload routes
+        # call reload_config()/_load_image_lists() directly instead.
         current_time = time.time()
-        
-        # Check for config reload request (every 2 seconds)
-        if current_time - self.last_config_check > 2.0:
-            self.last_config_check = current_time
-            if os.path.exists(self.reload_file):
-                try:
-                    self.reload_config()
-                    # Also reload image lists when config is reloaded (in case images were uploaded)
-                    self._load_image_lists()
-                    os.remove(self.reload_file)  # Remove reload trigger
-                    logger.info("Configuration and image lists reloaded from web interface")
-                except Exception as e:
-                    logger.error(f"Error reloading config: {e}")
-        
+
+        # Auto-rotate between enabled modes using display.display_durations
+        # (already a per-mode seconds value in config - clock: 15,
+        # weather: 30, stocks: 30, etc. - but never previously read by
+        # anything). Checked ahead of the render throttle below so
+        # rotation timing doesn't depend on it. A manual mode switch via
+        # the remote/API resets last_mode_rotation_time in set_mode()/
+        # cycle_mode(), so it always gets its own full duration first.
+        if len(self.modes) > 1:
+            duration = self._current_mode_duration()
+            if current_time - self.last_mode_rotation_time >= duration:
+                self.cycle_mode(1)
+
         if current_time - self.last_update < self.update_interval:
             return
         self.last_update = current_time
