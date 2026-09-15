@@ -101,7 +101,17 @@ def fetch_espn_scores(sport: str, league_id: str = None) -> List[Dict[str, Any]]
                 
                 status_type = status.get('type', {})
                 status_desc = status_type.get('description', '')
-                status_id = status_type.get('id', '')
+                # ESPN's status.type.id is a bare numeric string ("1", "2",
+                # "3"...), never one of the STATUS_* constants below - the
+                # actual constant name lives in status.type.name (confirmed
+                # live: {"id": "2", "name": "STATUS_IN_PROGRESS", ...}).
+                # Reading .id here meant every `status_id_upper in
+                # ['STATUS_...']` check below could never match; classification
+                # only ever worked by accident, via the status_desc_upper
+                # fallback text ("In Progress"/"Final") not covering every
+                # state - Halftime/Delayed games have no such fallback and
+                # were silently misclassified as neither live nor final.
+                status_id = status_type.get('name', '') or status_type.get('id', '')
                 
                 # Get date/time information
                 date_str = event.get('date', '')
@@ -319,7 +329,17 @@ def fetch_espn_scores_for_week(sport: str, week_offset: int = 0) -> List[Dict[st
                 
                 status_type = status.get('type', {})
                 status_desc = status_type.get('description', '')
-                status_id = status_type.get('id', '')
+                # ESPN's status.type.id is a bare numeric string ("1", "2",
+                # "3"...), never one of the STATUS_* constants below - the
+                # actual constant name lives in status.type.name (confirmed
+                # live: {"id": "2", "name": "STATUS_IN_PROGRESS", ...}).
+                # Reading .id here meant every `status_id_upper in
+                # ['STATUS_...']` check below could never match; classification
+                # only ever worked by accident, via the status_desc_upper
+                # fallback text ("In Progress"/"Final") not covering every
+                # state - Halftime/Delayed games have no such fallback and
+                # were silently misclassified as neither live nor final.
+                status_id = status_type.get('name', '') or status_type.get('id', '')
                 
                 date_str = event.get('date', '')
                 
@@ -607,7 +627,17 @@ def fetch_espn_scores_for_date(sport: str, date_str: str) -> List[Dict[str, Any]
                 
                 status_type = status.get('type', {})
                 status_desc = status_type.get('description', '')
-                status_id = status_type.get('id', '')
+                # ESPN's status.type.id is a bare numeric string ("1", "2",
+                # "3"...), never one of the STATUS_* constants below - the
+                # actual constant name lives in status.type.name (confirmed
+                # live: {"id": "2", "name": "STATUS_IN_PROGRESS", ...}).
+                # Reading .id here meant every `status_id_upper in
+                # ['STATUS_...']` check below could never match; classification
+                # only ever worked by accident, via the status_desc_upper
+                # fallback text ("In Progress"/"Final") not covering every
+                # state - Halftime/Delayed games have no such fallback and
+                # were silently misclassified as neither live nor final.
+                status_id = status_type.get('name', '') or status_type.get('id', '')
                 
                 date_str_game = event.get('date', '')
                 
