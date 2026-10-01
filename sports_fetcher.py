@@ -87,11 +87,11 @@ def fetch_espn_scores(sport: str, league_id: str = None) -> List[Dict[str, Any]]
                 home_score = home.get('score', '0')
                 away_score = away.get('score', '0')
                 
-                # If scores are None or empty, try alternative paths
-                if not home_score or home_score == '0':
-                    home_score = str(competition.get('competitors', [{}])[0].get('score', 0))
-                if not away_score or away_score == '0':
-                    away_score = str(competition.get('competitors', [{}])[1].get('score', 0))
+                # score is already the right competitor's own value; a real 0
+                
+                # used to be 'filled in' from competitors[0]/[1], which ignore
+                
+                # homeAway and so could copy the opponent's score.
                 
                 # Extract status information - check both event.status and competition.status
                 event_status = event.get('status', {})
@@ -253,7 +253,7 @@ def fetch_espn_scores(sport: str, league_id: str = None) -> List[Dict[str, Any]]
         return []
 
 
-def fetch_espn_scores_for_week(sport: str, week_offset: int = 0) -> List[Dict[str, Any]]:
+def fetch_espn_scores_for_week(sport: str, week_offset: int = 0, extra_params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
     Fetch sports scores from ESPN API for a specific week (for NFL/NCAAF)
     
@@ -292,7 +292,12 @@ def fetch_espn_scores_for_week(sport: str, week_offset: int = 0) -> List[Dict[st
         
         # Add week parameter if not current week (week_offset != 0)
         params = {}
-        if week_offset != 0:
+        if extra_params:
+            # e.g. {'week': 3, 'seasontype': 2} - ESPN's NFL scoreboard
+            # returns nothing for a YYYYMMDD-YYYYMMDD range, so the
+            # week_offset branch below never found any games for it.
+            params.update(extra_params)
+        elif week_offset != 0:
             # Calculate target week
             # For now, we'll use dates to approximate weeks
             # NFL/NCAAF weeks typically run Sun-Sat, but we'll use a 7-day range
@@ -317,11 +322,6 @@ def fetch_espn_scores_for_week(sport: str, week_offset: int = 0) -> List[Dict[st
                 
                 home_score = home.get('score', '0')
                 away_score = away.get('score', '0')
-                
-                if not home_score or home_score == '0':
-                    home_score = str(competition.get('competitors', [{}])[0].get('score', 0))
-                if not away_score or away_score == '0':
-                    away_score = str(competition.get('competitors', [{}])[1].get('score', 0))
                 
                 event_status = event.get('status', {})
                 comp_status = competition.get('status', {})
@@ -484,9 +484,11 @@ def fetch_ncaaf_games_with_week_iteration(team_abbr: str, max_weeks_back: int = 
             if team_games:
                 all_games.extend(team_games)
                 logger.info(f"Found {len(team_games)} games for {team_abbr} in week starting {week_start.strftime('%Y-%m-%d')}")
-                # If we found games, we can stop (we've found at least one game)
-                # This ensures we get current week games if available, or the most recent past week with games
-                break
+                # Stop once the team's most recent result is in hand - not
+                # at the first week with any game, which left only the
+                # upcoming game whenever it fell in the current week.
+                if any(g.get('is_final') or g.get('is_live') for g in all_games):
+                    break
             elif week_offset == 0:
                 # No games in current week, continue to previous weeks
                 logger.debug(f"No games found for {team_abbr} in current week, checking previous weeks...")
@@ -496,6 +498,29 @@ def fetch_ncaaf_games_with_week_iteration(team_abbr: str, max_weeks_back: int = 
             continue
     
     return all_games
+
+
+def fetch_nfl_recent_weeks() -> List[Dict[str, Any]]:
+    """Games from the current NFL week and the one before it, so a
+    favorite's last result stays on screen until its next game."""
+    url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
+    try:
+        data = requests.get(url, timeout=10).json()
+        week = int(data.get('week', {}).get('number', 0))
+        season_type = int(data.get('season', {}).get('type', 2))
+    except Exception as e:
+        logger.error(f"Could not read current NFL week: {e}")
+        return fetch_espn_scores_for_week('nfl', 0)
+    games, seen = [], set()
+    for wk in (week - 1, week):
+        if wk < 1:
+            continue
+        for g in fetch_espn_scores_for_week('nfl', extra_params={'week': wk, 'seasontype': season_type}):
+            key = (g.get('date'), g.get('home_team'), g.get('away_team'))
+            if key not in seen:
+                seen.add(key)
+                games.append(g)
+    return games
 
 
 def fetch_espn_scores_for_date_range(sport: str, days_back: int = 7, days_forward: int = 14) -> List[Dict[str, Any]]:
@@ -614,11 +639,6 @@ def fetch_espn_scores_for_date(sport: str, date_str: str) -> List[Dict[str, Any]
                 # Get scores
                 home_score = home.get('score', '0')
                 away_score = away.get('score', '0')
-                
-                if not home_score or home_score == '0':
-                    home_score = str(competition.get('competitors', [{}])[0].get('score', 0))
-                if not away_score or away_score == '0':
-                    away_score = str(competition.get('competitors', [{}])[1].get('score', 0))
                 
                 # Extract status information
                 event_status = event.get('status', {})

@@ -168,23 +168,14 @@ class MatrixDisplay:
             logger.debug(f"Could not display sport logo: {e}")
     
     def _load_fonts(self):
-        """Load fonts for display"""
-        try:
-            # Try to load Press Start 2P font
-            font_path = "assets/fonts/PressStart2P-Regular.ttf"
-            if os.path.exists(font_path):
-                self.font = ImageFont.truetype(font_path, 8)
-                self.small_font = ImageFont.truetype(font_path, 6)
-                self.tiny_font = ImageFont.truetype(font_path, 5)  # Even smaller for fantasy mode
-            else:
-                self.font = ImageFont.load_default()
-                self.small_font = ImageFont.load_default()
-                self.tiny_font = ImageFont.load_default()
-        except Exception as e:
-            logger.warning(f"Could not load custom font: {e}")
-            self.font = ImageFont.load_default()
-            self.small_font = ImageFont.load_default()
-            self.tiny_font = ImageFont.load_default()
+        """Load fonts for display. small/tiny are native-size bitmap fonts
+        (see pixel_fonts.py) - PressStart2P shrunk below its 8px grid
+        misrendered letters and digits."""
+        from pixel_fonts import fonts as pixel_fonts
+        self.fonts = pixel_fonts()
+        self.font = self.fonts["large"]
+        self.small_font = self.fonts["small"]
+        self.tiny_font = self.fonts["tiny"]
         
         # Display is ready - no test pattern needed
             
@@ -422,7 +413,7 @@ class DisplayController:
         self.current_stock_index = 0
         self.current_crypto_index = 0
         self.stock_data_cache = {}  # Cache for stock prices
-        self.last_stock_update = 0
+        self.stock_update_times = {}  # ticker -> last fetch attempt
         
         # Fantasy mode state
         self.fantasy_players = self.config.get('fantasy_players', [])
@@ -976,6 +967,37 @@ class DisplayController:
         effective_list.extend(self.sports_list)
         return effective_list
     
+    @staticmethod
+    def _canonical_sport(sport):
+        sport = (sport or '').lower().strip()
+        if sport in ['ncaam', 'ncaab', 'mens-college-basketball', 'college-basketball']:
+            return 'ncaam'
+        if sport in ['ncaaf', 'college-football']:
+            return 'ncaaf'
+        return sport
+
+    @staticmethod
+    def _has_active_game(games):
+        """True if any game is live, or scheduled to have started within the
+        last 5 hours but not yet marked final - those need fast refreshes."""
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        for g in games or []:
+            if g.get('is_live'):
+                return True
+            if g.get('is_final'):
+                continue
+            try:
+                start = datetime.fromisoformat((g.get('date') or '').replace('Z', '+00:00'))
+                if start.tzinfo and now - timedelta(hours=5) <= start <= now:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def _favorites_cache_ttl(self):
+        return 60 if self._has_active_game(self.favorites_cache) else 300
+
     def _get_favorite_games(self):
         """Get all games involving favorite teams, including closest previous/next games"""
         favorite_games = []
@@ -990,10 +1012,7 @@ class DisplayController:
             team_abbr = fav.get('team', '').upper().strip()
             if sport and team_abbr:
                 # Normalize sport names for consistency
-                if sport in ['ncaam', 'ncaab', 'mens-college-basketball', 'college-basketball']:
-                    sport = 'ncaam'  # Use ncaam as the canonical name
-                elif sport in ['ncaaf', 'college-football']:
-                    sport = 'ncaaf'  # Use ncaaf as the canonical name
+                sport = self._canonical_sport(sport)
                 if sport not in favorite_teams_by_sport:
                     favorite_teams_by_sport[sport] = set()
                 favorite_teams_by_sport[sport].add(team_abbr)
@@ -1019,7 +1038,8 @@ class DisplayController:
                 cached_data = self.date_range_cache.get(sport_id)
                 all_games = None
                 
-                if cached_data and (current_time - cached_data[1]) < DATE_RANGE_CACHE_TTL:
+                cache_ttl = 60 if cached_data and self._has_active_game(cached_data[0]) else DATE_RANGE_CACHE_TTL
+                if cached_data and (current_time - cached_data[1]) < cache_ttl:
                     # Use cached data
                     all_games = cached_data[0]
                     logger.debug(f"Using cached date range games for {sport_id} ({len(all_games)} games)")
@@ -1028,15 +1048,13 @@ class DisplayController:
                     from sports_fetcher import fetch_espn_scores_for_date_range, fetch_espn_scores_for_week, fetch_ncaaf_games_with_week_iteration
                     
                     if sport_id == 'nfl':
-                        # NFL: Use current week (check cache first, then fetch if needed)
-                        if sport_id in self.sports_data_cache:
-                            # Use already-fetched current week games from regular sports page
-                            all_games = self.sports_data_cache[sport_id]
-                            logger.debug(f"Using cached NFL games from sports_data_cache ({len(all_games)} games)")
-                        else:
-                            # Fetch current week
-                            all_games = fetch_espn_scores_for_week('nfl', week_offset=0)
-                            logger.info(f"Fetched NFL current week games ({len(all_games)} games)")
+                        # NFL: last week + this week. This used to reuse
+                        # sports_data_cache['nfl'], which nothing refreshes
+                        # when only favorites are shown - Sunday's games sat
+                        # at 0-0 "scheduled" for days after they ended.
+                        from sports_fetcher import fetch_nfl_recent_weeks
+                        all_games = fetch_nfl_recent_weeks()
+                        logger.info(f"Fetched NFL games for last week + this week ({len(all_games)} games)")
                     elif sport_id == 'ncaaf':
                         # NCAAF: For each favorite team, iterate through weeks until games found
                         all_games = []
@@ -1154,14 +1172,12 @@ class DisplayController:
                 traceback.print_exc()
                 continue
         
-        # Also check games already in cache (for today's games that might already be loaded)
-        favorite_team_set = set()
-        for fav in self.favorite_teams:
-            team_abbr = fav.get('team', '').upper().strip()
-            if team_abbr:
-                favorite_team_set.add(team_abbr)
-        
+        # Also check games already in cache (for today's games that might already be loaded).
+        # Matched per sport: abbreviations repeat across leagues (DAL, TB,
+        # CHI, TEX...), and matching them league-blind pulled Bears, Stars,
+        # Wings and Longhorns games into the favorites rotation.
         for sport_id in self.sports_data_cache.keys():
+            favorite_team_set = favorite_teams_by_sport.get(self._canonical_sport(sport_id), set())
             games = self.sports_data_cache.get(sport_id, [])
             for game in games:
                 away_team = game.get('away_team', '').upper().strip()
@@ -1224,7 +1240,7 @@ class DisplayController:
         if isinstance(sport, dict) and sport.get('is_favorites', False):
             # Use cached favorite games if available and fresh (cache for 5 minutes)
             current_time = time.time()
-            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            FAVORITES_CACHE_TTL = self._favorites_cache_ttl()  # 60s while a favorite is live, else 5 min
             
             if (isinstance(self.favorites_cache, list) and 
                 len(self.favorites_cache) > 0 and
@@ -1240,12 +1256,13 @@ class DisplayController:
                 
                 for sport_id in favorite_sports:
                     if sport_id and (sport_id not in self.sports_data_cache or 
-                                     current_time - self.last_sports_update > 60):
+                                     current_time - self.last_sports_update.get(sport_id, 0) > 60):
                         try:
                             from sports_fetcher import fetch_espn_scores
                             games = fetch_espn_scores(sport_id)
                             if games:
                                 self.sports_data_cache[sport_id] = games
+                                self.last_sports_update[sport_id] = time.time()
                                 logger.info(f"Fetched {len(games)} games for favorite sport {sport_id}")
                         except Exception as e:
                             logger.error(f"Error fetching games for favorite sport {sport_id}: {e}")
@@ -1337,7 +1354,7 @@ class DisplayController:
         if isinstance(sport, dict) and sport.get('is_favorites', False):
             # Use cached favorite games if available and fresh (cache for 5 minutes)
             current_time = time.time()
-            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            FAVORITES_CACHE_TTL = self._favorites_cache_ttl()  # 60s while a favorite is live, else 5 min
             
             if (isinstance(self.favorites_cache, list) and 
                 len(self.favorites_cache) > 0 and
@@ -1353,12 +1370,13 @@ class DisplayController:
                 
                 for sport_id in favorite_sports:
                     if sport_id and (sport_id not in self.sports_data_cache or 
-                                     current_time - self.last_sports_update > 60):
+                                     current_time - self.last_sports_update.get(sport_id, 0) > 60):
                         try:
                             from sports_fetcher import fetch_espn_scores
                             games = fetch_espn_scores(sport_id)
                             if games:
                                 self.sports_data_cache[sport_id] = games
+                                self.last_sports_update[sport_id] = time.time()
                                 logger.info(f"Fetched {len(games)} games for favorite sport {sport_id}")
                         except Exception as e:
                             logger.error(f"Error fetching games for favorite sport {sport_id}: {e}")
@@ -1680,6 +1698,170 @@ class DisplayController:
             except Exception as display_err:
                 logger.error(f"Error showing clock error on display: {display_err}")
             
+    # ------------------------------------------------------------------
+    # Shared drawing helpers (sports + stocks). Both sports paths
+    # (favorites and per-league) used to carry their own ~200-line copy of
+    # the game layout; they now both call _draw_game.
+    # ------------------------------------------------------------------
+
+    def _fit_font(self, text, max_width, ladder=("large", "medium", "small", "tiny")):
+        """Largest font from the ladder whose rendering of text fits max_width."""
+        fonts = self.matrix.fonts
+        for name in ladder:
+            font = fonts[name]
+            if self._text_width(text, font) <= max_width:
+                return font
+        return fonts[ladder[-1]]
+
+    def _text_width(self, text, font):
+        bbox = self.matrix.draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0]
+
+    def _text_height(self, font):
+        bbox = self.matrix.draw.textbbox((0, 0), "0A", font=font)
+        return bbox[3]
+
+    def _draw_label(self, text, font, color, x=None, y=0, center_x=None, outline=True, clamp=(0, 64)):
+        """Draw text at x, or centered on center_x (default: panel center),
+        kept inside the clamp range, with an optional 1px black outline so it
+        stays readable over a logo."""
+        draw = self.matrix.draw
+        width = self._text_width(text, font)
+        if x is None:
+            cx = self.matrix.image.width / 2 if center_x is None else center_x
+            x = int(round(cx - width / 2))
+        x = max(clamp[0], min(x, clamp[1] - width))
+        if outline:
+            for dx, dy in ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)):
+                draw.text((x + dx, y + dy), text, font=font, fill=(0, 0, 0))
+        draw.text((x, y), text, font=font, fill=color)
+
+    @staticmethod
+    def _fit_logo(img, size, max_aspect=None):
+        """Crop a logo to its visible pixels and scale it to fit size x size,
+        keeping its aspect ratio - most source logos carry transparent padding
+        that made them render far smaller than their slot. Returns None when
+        max_aspect is set and the visible logo is wider than that (wordmarks
+        like 'intel' or 'charles SCHWAB' are unreadable at ~20px)."""
+        if img is None:
+            return None
+        img = img.convert('RGBA')
+        alpha_box = img.getchannel('A').getbbox()
+        if alpha_box:
+            img = img.crop(alpha_box)
+        if img.width and img.height and max_aspect and img.width / img.height > max_aspect:
+            return None
+        img.thumbnail((size, size), Image.Resampling.LANCZOS)
+        return img
+
+    def _paste_logo(self, img, box_x, box_y, size):
+        """Paste an already-fitted logo centered inside a size x size box."""
+        if img is None:
+            return
+        x = box_x + (size - img.width) // 2
+        y = box_y + (size - img.height) // 2
+        self.matrix.image.paste(img, (x, y), img)
+
+    @staticmethod
+    def _team_label(name):
+        """ESPN puts placeholder names ("Yankees/Red Sox", "TBD") in the
+        abbreviation slot for undecided playoff matchups."""
+        name = (name or '').strip()
+        if not name or '/' in name or len(name) > 5:
+            return 'TBD'
+        return name.upper()
+
+    def _local_game_time(self, date_str):
+        from datetime import datetime
+        import pytz
+        game_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        if game_date.tzinfo:
+            try:
+                local_tz = pytz.timezone(self.config.get('local_timezone', 'America/New_York'))
+            except pytz.exceptions.UnknownTimeZoneError:
+                local_tz = pytz.timezone('America/New_York')
+            game_date = game_date.astimezone(local_tz)
+        return game_date
+
+    def _game_status(self, game):
+        """(text, color) for the status row: FINAL / live clock / start time."""
+        status_id = (game.get('status_id') or '').upper()
+        short = (game.get('status_short_detail') or '').strip()
+        if 'POSTPONED' in status_id:
+            return 'PPD', (255, 160, 0)
+        if 'CANCEL' in status_id:
+            return 'CANCELED', (255, 160, 0)
+        if 'FINAL' in status_id or game.get('is_final'):
+            # "Final/OT", "Final/10" keep their extra-time marker
+            text = short.upper() if short.upper().startswith('FINAL') else 'FINAL'
+            return text, (200, 200, 200)
+        if game.get('is_live') or any(s in status_id for s in ('IN_PROGRESS', 'HALFTIME', 'DELAYED', 'END_PERIOD')):
+            down_distance = game.get('down_distance_text', '')
+            text = down_distance or short or game.get('status_detail', '') or 'LIVE'
+            text = (text.replace(' - ', ' ').replace('Quarter', 'Q').replace('Halftime', 'HALF')
+                        .replace('1st', '1ST').replace('2nd', '2ND').replace('3rd', '3RD').replace('4th', '4TH'))
+            return text.upper(), (255, 80, 80)
+        date_str = game.get('date', '')
+        if date_str:
+            try:
+                from datetime import datetime
+                game_date = self._local_game_time(date_str)
+                hour = game_date.hour % 12 or 12
+                ampm = 'A' if game_date.hour < 12 else 'P'
+                clock = f"{hour}{ampm}M" if game_date.minute == 0 else f"{hour}:{game_date.minute:02d}{ampm}"
+                if game_date.date() == datetime.now(game_date.tzinfo).date():
+                    return f"TODAY {clock}", (255, 255, 255)
+                return f"{game_date.month}/{game_date.day} {clock}", (255, 255, 255)
+            except Exception as e:
+                logger.debug(f"Error parsing game date '{date_str}': {e}")
+        return (short or 'SCHEDULED').upper(), (255, 255, 255)
+
+    def _draw_game(self, game, sport_id_for_logos):
+        """One game on the 64x32 panel:
+            y=0-6    status (FINAL / live clock / start time), full width
+            y=7-24   18px logos at both edges, score large in the 28px gap
+            y=25-31  team abbreviations under their logos
+        """
+        if not self.matrix.draw:
+            return
+        W = self.matrix.image.width
+        LOGO, LOGO_Y = 18, 7
+        fonts = self.matrix.fonts
+
+        away = self._team_label(game.get('away_team'))
+        home = self._team_label(game.get('home_team'))
+
+        if self.asset_loader:
+            for side, abbr, box_x in (('away', away, 0), ('home', home, W - LOGO)):
+                if abbr == 'TBD':
+                    continue
+                try:
+                    logo = self.asset_loader.get_sport_logo(
+                        sport_id_for_logos, abbr, logo_url=game.get(f'{side}_logo_url', ''))
+                    self._paste_logo(self._fit_logo(logo, LOGO), box_x, LOGO_Y, LOGO)
+                except Exception as e:
+                    logger.error(f"Could not display {side} logo for {abbr}: {e}")
+
+        status_text, status_color = self._game_status(game)
+        status_font = self._fit_font(status_text, W, ("small", "tiny"))
+        if self._text_width(status_text, status_font) > W:
+            status_text = status_text[:W // 4]
+        self._draw_label(status_text, status_font, status_color, y=0, outline=False)
+
+        if not game.get('is_scheduled') or game.get('is_live') or game.get('is_final'):
+            score_text = f"{game.get('away_score', 0) or 0}-{game.get('home_score', 0) or 0}"
+            gap = W - 2 * LOGO
+            score_font = self._fit_font(score_text, gap + 2)
+            score_y = LOGO_Y + (LOGO - self._text_height(score_font)) // 2
+            self._draw_label(score_text, score_font, (255, 255, 0), y=score_y)
+        else:
+            self._draw_label('@', fonts['small'], (150, 150, 150), y=LOGO_Y + 5)
+
+        abbr_y = LOGO_Y + LOGO
+        for abbr, center_x, clamp in ((away, LOGO / 2, (0, W // 2)), (home, W - LOGO / 2, (W // 2, W))):
+            font = self._fit_font(abbr, W // 2, ("small", "tiny"))
+            self._draw_label(abbr, font, (0, 255, 255), y=abbr_y, center_x=center_x, clamp=clamp, outline=False)
+
     def display_sports(self):
         """Display sports mode with actual scores"""
         # Clear the image buffer completely before drawing
@@ -1730,7 +1912,7 @@ class DisplayController:
         if isinstance(sport, dict) and sport.get('is_favorites', False):
             # Display favorites - use cached data immediately for fast display
             current_time = time.time()
-            FAVORITES_CACHE_TTL = 300  # 5 minutes
+            FAVORITES_CACHE_TTL = self._favorites_cache_ttl()  # 60s while a favorite is live, else 5 min
             
             # Always use cached data first for immediate display
             if (isinstance(self.favorites_cache, list) and 
@@ -1744,7 +1926,11 @@ class DisplayController:
                 favorite_games = self.favorites_cache if isinstance(self.favorites_cache, list) else []
                 logger.debug(f"Favorites cache stale/empty, using existing cache ({len(favorite_games)} games) and fetching in background")
                 
-                # Trigger background fetch in a separate thread to avoid blocking
+                # Trigger background fetch in a separate thread to avoid blocking.
+                # Guarded: this runs every frame (~7/s) while the cache is
+                # stale, and an MLB/NCAA date-range fetch takes several
+                # seconds - without the flag it stacked up dozens of
+                # identical fetch threads per refresh.
                 def fetch_favorites_background():
                     try:
                         # Get fresh favorite games list (this will use date range cache if available)
@@ -1754,10 +1940,13 @@ class DisplayController:
                         logger.info(f"Background fetch completed: {len(fresh_games)} favorite games")
                     except Exception as e:
                         logger.error(f"Error in background favorite games fetch: {e}")
+                    finally:
+                        self._favorites_fetch_running = False
                 
-                import threading
-                fetch_thread = threading.Thread(target=fetch_favorites_background, daemon=True)
-                fetch_thread.start()
+                if not getattr(self, '_favorites_fetch_running', False):
+                    self._favorites_fetch_running = True
+                    import threading
+                    threading.Thread(target=fetch_favorites_background, daemon=True).start()
             
             if not favorite_games or len(favorite_games) == 0:
                 self.matrix.draw_text("NO FAVS", y=10, color=(255, 255, 0), small=True, center=True)
@@ -1774,7 +1963,7 @@ class DisplayController:
             else:
                 self.current_game = 0
             
-            logger.info(f"Displaying favorite game {self.current_game} of {len(favorite_games)} total favorite games (cache type: {type(self.favorites_cache)})")
+            logger.debug(f"Displaying favorite game {self.current_game} of {len(favorite_games)} total favorite games (cache type: {type(self.favorites_cache)})")
             if len(favorite_games) == 0:
                 self.matrix.draw_text("NO FAVS", y=10, color=(255, 255, 0), small=True, center=True)
                 self.matrix.update()
@@ -1782,12 +1971,6 @@ class DisplayController:
             
             game = favorite_games[self.current_game]
             sport_id = game.get('sport_id', 'sports')
-            
-            # Display game using same logic as regular sports
-            away = game.get('away_team', 'AWAY')[:4]
-            home = game.get('home_team', 'HOME')[:4]
-            away_score = str(game.get('away_score', 0))
-            home_score = str(game.get('home_score', 0))
             
             # Determine sport_id_for_logos
             sport_id_for_logos = sport_id.lower()
@@ -1798,198 +1981,7 @@ class DisplayController:
             elif 'ncaa' in sport_id_for_logos:
                 sport_id_for_logos = 'ncaa'
             
-            # Load logos and display (same as regular sports display)
-            away_logo = None
-            home_logo = None
-            if self.asset_loader:
-                try:
-                    away_logo_url = game.get('away_logo_url', '')
-                    away_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, away, logo_url=away_logo_url)
-                except Exception as e:
-                    logger.error(f"Error loading away logo: {e}")
-                try:
-                    home_logo_url = game.get('home_logo_url', '')
-                    home_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, home, logo_url=home_logo_url)
-                except Exception as e:
-                    logger.error(f"Error loading home logo: {e}")
-            
-            # Use same display logic as regular sports (reuse the code below)
-            # We'll fall through to the regular display code, but we need to set up the game data
-            # Actually, let's just call the same display code by setting up the variables
-            # But we need to skip the fetch logic, so let's handle it inline here
-            # For now, let's just reuse the display code by jumping to the game display section
-            # Actually, the simplest is to set sport_id to something that will work and use the existing display code
-            # But that's messy. Let me just duplicate the display logic for favorites.
-            # Actually, I think the best approach is to extract the game display into a helper method
-            # But for now, let's just inline it for favorites to get it working
-            
-            # Display logos, teams, scores, status - same non-overlapping
-            # band layout as the regular (non-favorites) path above:
-            # y=0-6 team names, y=7-22 logos with score in the gap between
-            # them, y=23-31 status.
-            LOGO_SIZE = 16
-            LOGO_Y = 7
-
-            if away_logo:
-                try:
-                    away_logo_resized = away_logo.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
-                    away_x = 0
-                    if away_logo_resized.mode == 'RGBA':
-                        self.matrix.image.paste(away_logo_resized, (away_x, LOGO_Y), away_logo_resized)
-                    else:
-                        self.matrix.image.paste(away_logo_resized, (away_x, LOGO_Y))
-                except Exception as e:
-                    logger.error(f"Could not display away logo: {e}")
-            if home_logo:
-                try:
-                    home_logo_resized = home_logo.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
-                    home_x = self.matrix.image.width - LOGO_SIZE
-                    if home_logo_resized.mode == 'RGBA':
-                        self.matrix.image.paste(home_logo_resized, (home_x, LOGO_Y), home_logo_resized)
-                    else:
-                        self.matrix.image.paste(home_logo_resized, (home_x, LOGO_Y))
-                except Exception as e:
-                    logger.error(f"Could not display home logo: {e}")
-
-            teams_text = f"{away} @ {home}"
-            score_text = f"{away_score}-{home_score}"
-
-            if self.matrix.draw:
-                teams_font = self.matrix.small_font
-                bbox = self.matrix.draw.textbbox((0, 0), teams_text, font=teams_font)
-                text_width = bbox[2] - bbox[0]
-                teams_x = (self.matrix.image.width - text_width) // 2
-                teams_y = 0
-                outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                for offset_x, offset_y in outline_offsets:
-                    self.matrix.draw.text((teams_x + offset_x, teams_y + offset_y), teams_text,
-                                         font=teams_font, fill=(0, 0, 0))
-                self.matrix.draw.text((teams_x, teams_y), teams_text, font=teams_font, fill=(0, 255, 255))
-
-            if self.matrix.draw:
-                score_font = self.matrix.small_font
-                bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
-                text_width = bbox[2] - bbox[0]
-                if text_width > 30:
-                    tiny_score_path = "assets/fonts/PressStart2P-Regular.ttf"
-                    if os.path.exists(tiny_score_path):
-                        score_font = ImageFont.truetype(tiny_score_path, 5)
-                        bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
-                        text_width = bbox[2] - bbox[0]
-                score_x = (self.matrix.image.width - text_width) // 2
-                score_y = LOGO_Y + (LOGO_SIZE - 7) // 2
-                outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                for offset_x, offset_y in outline_offsets:
-                    self.matrix.draw.text((score_x + offset_x, score_y + offset_y), score_text,
-                                         font=score_font, fill=(0, 0, 0))
-                self.matrix.draw.text((score_x, score_y), score_text, font=score_font, fill=(255, 255, 0))
-            
-            # Display status (reuse logic from regular sports - see below for full implementation)
-            status_text = ""
-            status_id = game.get('status_id', '').upper()
-            if 'FINAL' in status_id or game.get('is_final', False):
-                status_text = "FINAL"
-            elif 'IN_PROGRESS' in status_id or 'HALFTIME' in status_id or 'DELAYED' in status_id or game.get('is_live', False):
-                clock = game.get('clock', '')
-                period_name = game.get('period_name', '')
-                status_detail = game.get('status_detail', '')
-                if status_detail:
-                    if ' - ' in status_detail:
-                        parts = status_detail.split(' - ', 1)
-                        if len(parts) == 2:
-                            clock_part = parts[0].strip()
-                            period_part = parts[1].strip()
-                            status_text = f"{clock_part} {period_part}" if clock_part else period_part
-                        else:
-                            status_text = status_detail
-                    else:
-                        status_text = status_detail
-                elif clock and period_name:
-                    status_text = f"{clock} {period_name}"
-                elif period_name:
-                    status_text = period_name
-                elif clock:
-                    status_text = clock
-                else:
-                    status_text = "LIVE"
-            elif 'SCHEDULED' in status_id or 'PRE' in status_id or game.get('is_scheduled', False):
-                date_str = game.get('date', '')
-                if date_str:
-                    try:
-                        from datetime import datetime
-                        import pytz
-                        if 'Z' in date_str:
-                            game_date_utc = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                            if game_date_utc.tzinfo:
-                                local_tz_str = self.config.get('local_timezone', 'America/New_York')
-                                try:
-                                    local_tz = pytz.timezone(local_tz_str)
-                                except pytz.exceptions.UnknownTimeZoneError:
-                                    local_tz = pytz.timezone('America/New_York')
-                                game_date = game_date_utc.astimezone(local_tz)
-                            else:
-                                game_date = game_date_utc
-                        elif '+' in date_str or date_str.count('-') >= 3:
-                            game_date = datetime.fromisoformat(date_str)
-                            if game_date.tzinfo:
-                                local_tz_str = self.config.get('local_timezone', 'America/New_York')
-                                try:
-                                    local_tz = pytz.timezone(local_tz_str)
-                                except pytz.exceptions.UnknownTimeZoneError:
-                                    local_tz = pytz.timezone('America/New_York')
-                                game_date = game_date.astimezone(local_tz)
-                        else:
-                            game_date = datetime.fromisoformat(date_str.split('.')[0])
-                        month = game_date.month
-                        day = game_date.day
-                        date_display = f"{month}/{day}"
-                        hour = game_date.hour
-                        minute = game_date.minute
-                        am_pm = "AM" if hour < 12 else "PM"
-                        hour_12 = hour % 12
-                        if hour_12 == 0:
-                            hour_12 = 12
-                        time_display = f"{hour_12}:{minute:02d}{am_pm}"
-                        status_text = f"{date_display} {time_display}"
-                    except Exception as e:
-                        logger.error(f"Error parsing date '{date_str}': {e}")
-                        status_text = "SCHEDULED"
-            
-            if status_text:
-                max_chars = 12 if ('/' in status_text and ('AM' in status_text or 'PM' in status_text)) else 8
-                if len(status_text) > max_chars:
-                    status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
-                status_y = self.matrix.image.height - 8
-                if self.matrix.draw:
-                    try:
-                        # 4x6-font.ttf is a real small bitmap font, not an 8x8
-                        # grid font shrunk down - PressStart2P at size 6 was
-                        # illegible enough to misread digits (e.g. "6" as "G",
-                        # confirmed live via /api/preview.png).
-                        tiny_font_path = "assets/fonts/4x6-font.ttf"
-                        if os.path.exists(tiny_font_path):
-                            status_font = ImageFont.truetype(tiny_font_path, 8)
-                            bbox = self.matrix.draw.textbbox((0, 0), status_text, font=status_font)
-                            text_width = bbox[2] - bbox[0]
-                            status_x = (self.matrix.image.width - text_width) // 2
-                            outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                            for offset_x, offset_y in outline_offsets:
-                                self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text, 
-                                                     font=status_font, fill=(0, 0, 0))
-                            self.matrix.draw.text((status_x, status_y), status_text, font=status_font, fill=(200, 200, 200))
-                        else:
-                            status_font = self.matrix.font
-                            bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
-                            text_width = bbox[2] - bbox[0]
-                            status_x = (self.matrix.image.width - text_width) // 2
-                            outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                            for offset_x, offset_y in outline_offsets:
-                                self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
-                                                     font=status_font, fill=(0, 0, 0))
-                            self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
-                    except Exception as e:
-                        logger.debug(f"Error displaying status: {e}")
-            
+            self._draw_game(game, sport_id_for_logos)
             self.matrix.update()
             return
         
@@ -2092,265 +2084,7 @@ class DisplayController:
         
         if games and len(games) > 0 and self.current_game < len(games):
             game = games[self.current_game]
-            # Display: AWAY @ HOME or AWAY vs HOME
-            away = game.get('away_team', 'AWAY')[:4]  # Limit to 4 chars
-            home = game.get('home_team', 'HOME')[:4]
-            away_score = str(game.get('away_score', 0))
-            home_score = str(game.get('home_score', 0))
-            
-            # Try to load team logos
-            away_logo = None
-            home_logo = None
-            if self.asset_loader:
-                logger.info(f"Loading logos for sport_id={sport_id_for_logos}, away={away}, home={home}")
-                try:
-                    # Get logo URLs from game data if available
-                    away_logo_url = game.get('away_logo_url', '')
-                    away_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, away, logo_url=away_logo_url)
-                    logger.info(f"Loading away logo for {away} (sport_id={sport_id_for_logos}): {away_logo is not None}")
-                except Exception as e:
-                    logger.error(f"Error loading away logo: {e}")
-                try:
-                    # Get logo URLs from game data if available
-                    home_logo_url = game.get('home_logo_url', '')
-                    home_logo = self.asset_loader.get_sport_logo(sport_id_for_logos, home, logo_url=home_logo_url)
-                    logger.info(f"Loading home logo for {home} (sport_id={sport_id_for_logos}): {home_logo is not None}")
-                except Exception as e:
-                    logger.error(f"Error loading home logo: {e}")
-            
-            # Layout, redesigned to give every element its own non-overlapping
-            # band (64x32 has no spare room to double up):
-            #   y=0-6:   team abbreviations, full width
-            #   y=7-22:  logos in the corners (16x16, not full-height) with
-            #            the score in the untouched gap between them
-            #   y=23-31: status (period/clock/FINAL/scheduled date+time, or
-            #            down & distance for a live game with one available)
-            # The old layout centered team names and score across the FULL
-            # 64px width while 24x24 logos sat at x=0 and x=40 - only a 16px
-            # gap remained between them, so anything wider than that (every
-            # real team-name pair, most scores) rendered directly on top of
-            # both logos. Confirmed live via /api/preview.png.
-            LOGO_SIZE = 16
-            LOGO_Y = 7
-
-            if away_logo:
-                try:
-                    away_logo_resized = away_logo.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
-                    away_x = 0  # At left edge
-                    if away_logo_resized.mode == 'RGBA':
-                        self.matrix.image.paste(away_logo_resized, (away_x, LOGO_Y), away_logo_resized)
-                    else:
-                        self.matrix.image.paste(away_logo_resized, (away_x, LOGO_Y))
-                    logger.debug(f"Displayed away logo: {away}")
-                except Exception as e:
-                    logger.error(f"Could not display away logo: {e}")
-            if home_logo:
-                try:
-                    home_logo_resized = home_logo.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS)
-                    home_x = self.matrix.image.width - LOGO_SIZE  # At right edge
-                    if home_logo_resized.mode == 'RGBA':
-                        self.matrix.image.paste(home_logo_resized, (home_x, LOGO_Y), home_logo_resized)
-                    else:
-                        self.matrix.image.paste(home_logo_resized, (home_x, LOGO_Y))
-                    logger.debug(f"Displayed home logo: {home}")
-                except Exception as e:
-                    logger.error(f"Could not display home logo: {e}")
-
-            # Team names and score in the center (with space for logos on sides)
-            teams_text = f"{away} @ {home}"
-            score_text = f"{away_score}-{home_score}"
-
-            # Team names: full-width band above the logos - nothing else
-            # occupies y=0-6, so it can use the whole 64px with no overlap risk.
-            if self.matrix.draw:
-                teams_font = self.matrix.small_font
-                bbox = self.matrix.draw.textbbox((0, 0), teams_text, font=teams_font)
-                text_width = bbox[2] - bbox[0]
-                teams_x = (self.matrix.image.width - text_width) // 2
-                teams_y = 0
-                outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                for offset_x, offset_y in outline_offsets:
-                    self.matrix.draw.text((teams_x + offset_x, teams_y + offset_y), teams_text,
-                                         font=teams_font, fill=(0, 0, 0))
-                self.matrix.draw.text((teams_x, teams_y), teams_text, font=teams_font, fill=(0, 255, 255))
-
-            # Score: sits in the gap between the logos (x=16 to x=48, 32px).
-            # Centering on the FULL image width still lands inside that gap
-            # as long as the rendered text is <=32px wide, since the gap is
-            # itself centered on the same midpoint - shrink to the tiny font
-            # once a 3-digit score (e.g. "112-108") would run past that.
-            if self.matrix.draw:
-                score_font = self.matrix.small_font
-                bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
-                text_width = bbox[2] - bbox[0]
-                if text_width > 30:
-                    tiny_score_path = "assets/fonts/PressStart2P-Regular.ttf"
-                    if os.path.exists(tiny_score_path):
-                        score_font = ImageFont.truetype(tiny_score_path, 5)
-                        bbox = self.matrix.draw.textbbox((0, 0), score_text, font=score_font)
-                        text_width = bbox[2] - bbox[0]
-                score_x = (self.matrix.image.width - text_width) // 2
-                score_y = LOGO_Y + (LOGO_SIZE - 7) // 2
-                outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                for offset_x, offset_y in outline_offsets:
-                    self.matrix.draw.text((score_x + offset_x, score_y + offset_y), score_text,
-                                         font=score_font, fill=(0, 0, 0))
-                self.matrix.draw.text((score_x, score_y), score_text, font=score_font, fill=(255, 255, 0))
-            
-            # Top middle: Period/time/FINAL/Scheduled
-            status_text = ""
-            status_id = game.get('status_id', '').upper()
-            
-            # Check status_id first, then fall back to boolean flags
-            if 'FINAL' in status_id or game.get('is_final', False):
-                status_text = "FINAL"
-            elif 'IN_PROGRESS' in status_id or 'HALFTIME' in status_id or 'DELAYED' in status_id or game.get('is_live', False):
-                # Show clock and period for live games
-                clock = game.get('clock', '')
-                period_name = game.get('period_name', '')
-                status_detail = game.get('status_detail', '')
-                status_short_detail = game.get('status_short_detail', '')
-                
-                # Prefer status_detail if available (e.g., "2:03 - 4th", "5:01 - 2nd Half")
-                if status_detail:
-                    # Extract just the essential part (clock and period)
-                    if ' - ' in status_detail:
-                        parts = status_detail.split(' - ', 1)
-                        if len(parts) == 2:
-                            clock_part = parts[0].strip()
-                            period_part = parts[1].strip()
-                            status_text = f"{clock_part} {period_part}" if clock_part else period_part
-                        else:
-                            status_text = status_detail
-                    else:
-                        status_text = status_detail
-                elif clock and period_name:
-                    status_text = f"{clock} {period_name}"
-                elif period_name:
-                    status_text = period_name
-                elif clock:
-                    status_text = clock
-                elif status_short_detail:
-                    status_text = status_short_detail
-                else:
-                    status_text = "LIVE"
-            elif 'SCHEDULED' in status_id or 'PRE' in status_id or game.get('is_scheduled', False):
-                # Show date and time for scheduled games
-                date_str = game.get('date', '')
-                if date_str:
-                    try:
-                        from datetime import datetime
-                        import pytz
-                        # Parse ISO format date (handle both with and without timezone)
-                        if 'Z' in date_str:
-                            game_date_utc = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                            # Convert to local timezone
-                            if game_date_utc.tzinfo:
-                                local_tz_str = self.config.get('local_timezone', 'America/New_York')
-                                try:
-                                    local_tz = pytz.timezone(local_tz_str)
-                                except pytz.exceptions.UnknownTimeZoneError:
-                                    logger.warning(f"Unknown local timezone '{local_tz_str}', defaulting to America/New_York")
-                                    local_tz = pytz.timezone('America/New_York')
-                                game_date = game_date_utc.astimezone(local_tz)
-                            else:
-                                game_date = game_date_utc
-                        elif '+' in date_str or date_str.count('-') >= 3:
-                            game_date = datetime.fromisoformat(date_str)
-                            if game_date.tzinfo:
-                                local_tz_str = self.config.get('local_timezone', 'America/New_York')
-                                try:
-                                    local_tz = pytz.timezone(local_tz_str)
-                                except pytz.exceptions.UnknownTimeZoneError:
-                                    local_tz = pytz.timezone('America/New_York')
-                                game_date = game_date.astimezone(local_tz)
-                        else:
-                            game_date = datetime.fromisoformat(date_str.split('.')[0])
-                        
-                        # Format as compact "M/D H:MMAM/PM" (remove leading zeros, no space)
-                        month = game_date.month
-                        day = game_date.day
-                        date_display = f"{month}/{day}"  # No leading zeros
-                        hour = game_date.hour
-                        minute = game_date.minute
-                        am_pm = "AM" if hour < 12 else "PM"
-                        hour_12 = hour % 12
-                        if hour_12 == 0:
-                            hour_12 = 12
-                        time_display = f"{hour_12}:{minute:02d}{am_pm}"
-                        status_text = f"{date_display} {time_display}"
-                        logger.debug(f"Formatted scheduled game time: {status_text}")
-                    except Exception as e:
-                        logger.error(f"Error parsing date '{date_str}': {e}")
-                        status_text = "SCHEDULED"
-            else:
-                status_desc = game.get('status', '')
-                if status_desc and status_desc not in ['Scheduled', 'In Progress', 'Final']:
-                    status_text = status_desc
-
-            # A live game's down & distance ("3RD & 7") is more specific and
-            # more useful than its bare period/clock, and the bottom band
-            # only has room for one line - show it in place of, not
-            # alongside, the period/clock status computed above. (The old
-            # code drew both status_text AND down_distance at the same
-            # y = height - 6, unconditionally on top of each other whenever
-            # both were present.)
-            down_distance = game.get('down_distance_text', '')
-            if down_distance and (game.get('is_live', False) or 'IN_PROGRESS' in status_id):
-                status_text = down_distance
-
-            # Display status at top middle (y=1)
-            if status_text:
-                max_chars = 12 if ('/' in status_text and ('AM' in status_text or 'PM' in status_text)) else 8
-                if len(status_text) > max_chars:
-                    status_text = status_text[:max_chars-1] + '…' if max_chars > 8 else status_text[:max_chars]
-                # Position status text at bottom, below scores and logos
-                status_y = self.matrix.image.height - 8
-                try:
-                    # 4x6-font.ttf is a real small bitmap font, not an 8x8
-                    # grid font shrunk down - PressStart2P at size 6 was
-                    # illegible enough to misread digits (e.g. "6" as "G",
-                    # confirmed live via /api/preview.png).
-                    tiny_font_path = "assets/fonts/4x6-font.ttf"
-                    if os.path.exists(tiny_font_path):
-                        status_font = ImageFont.truetype(tiny_font_path, 8)
-                        bbox = self.matrix.draw.textbbox((0, 0), status_text, font=status_font)
-                        text_width = bbox[2] - bbox[0]
-                        status_x = (self.matrix.image.width - text_width) // 2
-                        # Draw outline (black) at 8 positions around the text
-                        outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                        for offset_x, offset_y in outline_offsets:
-                            self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text, 
-                                                 font=status_font, fill=(0, 0, 0))
-                        # Draw main text in gray on top
-                        self.matrix.draw.text((status_x, status_y), status_text, font=status_font, fill=(200, 200, 200))
-                    else:
-                        # Use regular font (not small) for better legibility
-                        status_font = self.matrix.font
-                        bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
-                        text_width = bbox[2] - bbox[0]
-                        status_x = (self.matrix.image.width - text_width) // 2
-                        # Draw outline (black) at 8 positions around the text
-                        outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                        for offset_x, offset_y in outline_offsets:
-                            self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
-                                                 font=status_font, fill=(0, 0, 0))
-                        # Draw main text in gray on top
-                        self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
-                except Exception as e:
-                    logger.debug(f"Error using font: {e}")
-                    # Fallback with regular font and outline
-                    status_font = self.matrix.font
-                    bbox = self.matrix.draw.textbbox((0, 0), status_text[:10], font=status_font)
-                    text_width = bbox[2] - bbox[0]
-                    status_x = (self.matrix.image.width - text_width) // 2
-                    # Draw outline (black) at 8 positions around the text
-                    outline_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-                    for offset_x, offset_y in outline_offsets:
-                        self.matrix.draw.text((status_x + offset_x, status_y + offset_y), status_text[:10], 
-                                             font=status_font, fill=(0, 0, 0))
-                    # Draw main text in gray on top
-                    self.matrix.draw.text((status_x, status_y), status_text[:10], font=status_font, fill=(200, 200, 200))
+            self._draw_game(game, sport_id_for_logos)
         else:
             # No games available or current_game out of bounds - loop back to first game
             if games and len(games) > 0:
@@ -2413,73 +2147,76 @@ class DisplayController:
         
         logger.debug(f"display_stocks: submode={self.stocks_submode}, ticker={ticker}, index={current_index}")
         
-        # Fetch price if cache is old (update every 30 seconds)
+        # Per-ticker refresh. This used to share one last_stock_update
+        # timestamp across every ticker, so with items rotating every few
+        # seconds only about one ticker in five ever refetched - the rest
+        # showed prices days old (INTC sat at a previous session's close).
         current_time = time.time()
         cache_key = ticker
-        
-        if (cache_key not in self.stock_data_cache or 
-            current_time - self.last_stock_update > 30):
-            try:
-                from stock_fetcher import fetch_stock_price, fetch_crypto_price
-                
-                # Determine if it's crypto or stock
-                is_crypto = ticker in self.crypto_list
-                
-                if is_crypto:
-                    data = fetch_crypto_price(ticker)
-                else:
-                    data = fetch_stock_price(ticker)
-                    
-                if data:
-                    self.stock_data_cache[cache_key] = data
-                    self.last_stock_update = current_time
-            except Exception as e:
-                logger.error(f"Error fetching stock price: {e}")
-        
+        is_crypto = ticker in self.crypto_list
+        if current_time - self.stock_update_times.get(cache_key, 0) > 60:
+            self.stock_update_times[cache_key] = current_time
+
+            def fetch_price():
+                try:
+                    from stock_fetcher import fetch_stock_price, fetch_crypto_price
+                    data = fetch_crypto_price(ticker) if is_crypto else fetch_stock_price(ticker)
+                    if data:
+                        self.stock_data_cache[cache_key] = data
+                except Exception as e:
+                    logger.error(f"Error fetching price for {ticker}: {e}")
+
+            if cache_key in self.stock_data_cache:
+                import threading
+                threading.Thread(target=fetch_price, daemon=True).start()
+            else:
+                fetch_price()
+
         data = self.stock_data_cache.get(cache_key)
-        
-        if data:
-            # Try to load stock/crypto icon
+        # "BTC-USD" -> "BTC": the quote currency is implied
+        symbol = ticker.upper()
+        if is_crypto and symbol.endswith('-USD'):
+            symbol = symbol[:-4]
+
+        if data and self.matrix.draw:
+            fonts = self.matrix.fonts
+            W = self.matrix.image.width
+            price = data.get('price', 0) or 0
+            change_pct = data.get('change_percent', 0) or 0
+
+            # Icon on the left, 20x20, cropped to its visible pixels. Wide
+            # wordmark logos (intel, charles SCHWAB, SUPERMICRO) are
+            # unreadable at this size, so those tickers go text-only.
             icon = None
             if self.asset_loader:
-                icon = self.asset_loader.get_stock_icon(ticker)
-            
-            # Display ticker and price
-            price = data.get('price', 0)
-            change = data.get('change', 0)
-            change_pct = data.get('change_percent', 0)
-            
-            # If icon available, show it on left side (larger for better visibility)
+                icon = self._fit_logo(self.asset_loader.get_stock_icon(ticker, is_crypto=is_crypto), 20, max_aspect=1.6)
             if icon:
-                try:
-                    icon = icon.resize((20, 20), Image.Resampling.LANCZOS)
-                    icon_y = (self.matrix.image.height - 20) // 2  # Center vertically
-                    self.matrix.image.paste(icon, (0, icon_y))
-                except:
-                    pass
-            
-            # Line 1: Sub-mode label and ticker
-            mode_label = "STOCK" if self.stocks_submode == "stocks" else "CRYPTO"
-            self.matrix.draw_text(mode_label, y=2, color=(100, 100, 255), small=True, center=True)
-            # Line 2: Ticker
-            self.matrix.draw_text(ticker[:6], y=9, color=(0, 255, 0), small=True, center=True)
-            # Line 3: Price - offset to right to avoid icon overlap
-            price_str = f"${price:.2f}" if price < 1000 else f"${price:.0f}"
-            # Offset x position if icon is present (icon is 20px wide)
-            x_offset = 22 if icon else None
-            self.matrix.draw_text(price_str, x=x_offset, y=16, color=(255, 255, 255), small=True, center=(icon is None))
-            # Line 4: Change percentage - center aligned
-            if change >= 0:
-                change_color = (0, 255, 0)  # Green
-                change_str = f"+{change_pct:.1f}%"
+                self._paste_logo(icon, 0, 6, 20)
+                col_x, col_w = 22, W - 22
             else:
-                change_color = (255, 0, 0)  # Red
-                change_str = f"{change_pct:.1f}%"
-            self.matrix.draw_text(change_str, y=24, color=change_color, small=True, center=True)
+                col_x, col_w = 0, W
+            center = col_x + col_w / 2
+
+            if price >= 1000:
+                price_str = f"${price:,.0f}"
+            elif price >= 1:
+                price_str = f"${price:.2f}"
+            else:
+                price_str = f"${price:.4f}"
+            up = change_pct >= 0
+            change_str = f"{'+' if up else ''}{change_pct:.2f}%"
+            change_color = (0, 255, 0) if up else (255, 40, 40)
+
+            clamp = (col_x, W)
+            self._draw_label(symbol, self._fit_font(symbol, col_w), (0, 200, 255),
+                             y=0, center_x=center, clamp=clamp, outline=False)
+            self._draw_label(price_str, self._fit_font(price_str, col_w, ("medium", "small", "tiny")),
+                             (255, 255, 255), y=11, center_x=center, clamp=clamp, outline=False)
+            self._draw_label(change_str, self._fit_font(change_str, col_w, ("small", "tiny")),
+                             change_color, y=24, center_x=center, clamp=clamp, outline=False)
         else:
-            # No data available, just show ticker
-            self.matrix.draw_text(ticker[:8], y=10, color=(0, 255, 0))
-            
+            self.matrix.draw_text(symbol[:8], y=12, color=(0, 200, 255))
+
         self.matrix.update()
     
     def next_fantasy_player(self):
@@ -2988,7 +2725,7 @@ class DisplayController:
                     self.matrix.draw_text(location_display, y=2, color=(0, 200, 255), small=True, center=True)
             else:
                 # Center align for short names
-                self.matrix.draw_text(location_name, y=2, color=(0, 200, 255), small=True, center=True)
+                self.matrix.draw_text(location_name, y=0, color=(0, 200, 255), small=True, center=True)
 
             # Icon + temp/condition share the remaining band below the
             # location line, split into a left icon column and a right text
@@ -3018,19 +2755,25 @@ class DisplayController:
             text_x = icon_size + 2
             text_band_height = self.matrix.image.height - band_top
             temp_str = f"{temp}°F"
-            temp_y = band_top + max(0, (text_band_height - 17) // 2)
+            # Temperature, then the condition word-wrapped onto up to two
+            # lines in the text column (it used to be cut at 8 chars:
+            # "Partly C"). The block is vertically centered in the band.
+            col_w = self.matrix.image.width - text_x
+            center = text_x + col_w / 2
+            lines = []
+            for word in condition.split():
+                if lines and self._text_width(f"{lines[-1]} {word}", self.matrix.fonts["small"]) <= col_w:
+                    lines[-1] = f"{lines[-1]} {word}"
+                else:
+                    lines.append(word)
+            lines = lines[:2]
+            block_h = 8 + 1 + 8 * len(lines)
+            temp_y = band_top + max(0, (text_band_height - block_h) // 2)
             self.matrix.draw_text(temp_str, x=text_x, y=temp_y, color=(255, 255, 255), center=True)
-
-            # Line 3: Condition - truncate intelligently
-            max_cond_chars = 8
-            cond_y = temp_y + 10
-            if len(condition) > max_cond_chars:
-                # Truncate condition
-                cond_str = condition[:max_cond_chars]
-                self.matrix.draw_text(cond_str, x=text_x, y=cond_y, color=(200, 200, 255), small=True, center=True)
-            else:
-                # Center align for short conditions
-                self.matrix.draw_text(condition, x=text_x, y=cond_y, color=(200, 200, 255), small=True, center=True)
+            for i, line in enumerate(lines):
+                font = self._fit_font(line, col_w, ("small", "tiny"))
+                self._draw_label(line, font, (200, 200, 255), y=temp_y + 9 + i * 8,
+                                 center_x=center, clamp=(text_x, self.matrix.image.width), outline=False)
         else:
             # No data available, just show location name
             self.matrix.draw_text(location_name[:8], y=10, color=(0, 200, 255))

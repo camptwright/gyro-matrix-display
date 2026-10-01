@@ -30,6 +30,7 @@ class AssetLoader:
                 'nba': 'sports/nba_logos',
                 'mlb': 'sports/mlb_logos',
                 'nhl': 'sports/nhl_logos',
+                'wnba': 'sports/wnba_logos',
                 'ncaaf': 'sports/ncaa_logos',  # College football
                 'ncaab': 'sports/ncaa_logos',   # College basketball
                 'ncaa': 'sports/ncaa_logos',    # General NCAA
@@ -79,7 +80,7 @@ class AssetLoader:
                                     logger.error(f"Error loading logo {logo_path}: {e}")
                                     continue
                             else:
-                                logger.info(f"Using cached logo: {logo_path}")
+                                logger.debug(f"Using cached logo: {logo_path}")
                                 return self.logo_cache[logo_path]
                     # Logo not found locally, try to download from internet
                     # First try provided logo_url, then try generic download
@@ -99,23 +100,10 @@ class AssetLoader:
                     
                     logger.warning(f"Logo not found for {team_abbr} in {logo_dir}, trying conference/league logo...")
                 else:
-                    # Try all directories as fallback
-                    for sport, dir_path in logo_dirs.items():
-                        for variant in team_variants:
-                            logo_path = os.path.join(self.assets_dir, dir_path, f"{variant}.png")
-                            if os.path.exists(logo_path):
-                                if logo_path not in self.logo_cache:
-                                    try:
-                                        img = Image.open(logo_path).convert('RGBA')
-                                        self.logo_cache[logo_path] = img
-                                        logger.info(f"Loaded team logo (fallback): {logo_path} for {team_abbr}")
-                                        return self.logo_cache[logo_path]
-                                    except Exception as e:
-                                        logger.error(f"Error loading logo {logo_path}: {e}")
-                                        continue
-                                else:
-                                    return self.logo_cache[logo_path]
-                    
+                    # No league directory for this sport: don't search the
+                    # other leagues' folders - abbreviations repeat across
+                    # leagues (WNBA DAL got the Cowboys star from nfl_logos).
+                    # Use the game's own logo URL below instead.
                     # Try downloading if not found in any directory
                     downloaded_logo = None
                     if logo_url:
@@ -144,7 +132,7 @@ class AssetLoader:
                                     logger.error(f"Error loading conference logo {conf_path}: {e}")
                                     continue
                             else:
-                                logger.info(f"Using cached conference logo: {conf_path}")
+                                logger.debug(f"Using cached conference logo: {conf_path}")
                                 return self.logo_cache[conf_path]
                     
                     # Try Conference_Usa_Logo_300X300.png (the one we found)
@@ -159,7 +147,7 @@ class AssetLoader:
                             except Exception as e:
                                 logger.error(f"Error loading conference logo {conf_usa_path}: {e}")
                         else:
-                            logger.info(f"Using cached conference logo: {conf_usa_path}")
+                            logger.debug(f"Using cached conference logo: {conf_usa_path}")
                             return self.logo_cache[conf_usa_path]
             
             # Fall back to league logo
@@ -331,25 +319,23 @@ class AssetLoader:
             logger.debug(f"Error in _download_team_logo for {team_abbr}: {e}")
             return None
     
-    def get_stock_icon(self, ticker: str) -> Optional[Image.Image]:
-        """Get stock/crypto icon"""
+    def get_stock_icon(self, ticker: str, is_crypto: bool = None) -> Optional[Image.Image]:
+        """Get stock/crypto icon. Crypto icons are named by base symbol
+        (BTC.png), so "BTC-USD" is looked up as "BTC". Stocks never fall
+        through to crypto_icons - tickers collide (AST, T...)."""
         try:
-            # Try crypto first
-            crypto_path = os.path.join(self.assets_dir, "stocks", "crypto_icons", f"{ticker.upper()}.png")
-            if os.path.exists(crypto_path):
-                if crypto_path not in self.logo_cache:
-                    img = Image.open(crypto_path).convert('RGB')
-                    self.logo_cache[crypto_path] = img
-                return self.logo_cache[crypto_path]
-            
-            # Try stock ticker
-            ticker_path = os.path.join(self.assets_dir, "stocks", "ticker_icons", f"{ticker.upper()}.png")
-            if os.path.exists(ticker_path):
-                if ticker_path not in self.logo_cache:
-                    img = Image.open(ticker_path).convert('RGB')
-                    self.logo_cache[ticker_path] = img
-                return self.logo_cache[ticker_path]
-                
+            symbol = ticker.upper()
+            if is_crypto is None:
+                is_crypto = symbol.endswith("-USD")
+            if is_crypto:
+                folder, name = "crypto_icons", symbol.split("-")[0]
+            else:
+                folder, name = "ticker_icons", symbol
+            path = os.path.join(self.assets_dir, "stocks", folder, f"{name}.png")
+            if os.path.exists(path):
+                if path not in self.logo_cache:
+                    self.logo_cache[path] = Image.open(path).convert('RGBA')
+                return self.logo_cache[path]
         except Exception as e:
             logger.debug(f"Could not load stock icon: {e}")
         return None

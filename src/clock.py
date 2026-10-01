@@ -64,7 +64,10 @@ class Clock:
         try:
             self.ampm_font = ImageFont.truetype(_FONT_PATH, 8)
             self.time_font = ImageFont.truetype(_FONT_PATH, 12)
-            self.date_font = ImageFont.truetype(_SMALL_FONT_PATH, 8)
+            # Native 5x7 bitmap font (see pixel_fonts.py); the 4x6 TTF at
+            # 8px was resampled and its glyphs smeared on the panel.
+            from pixel_fonts import bdf
+            self.date_font = bdf("5x7") or ImageFont.truetype(_SMALL_FONT_PATH, 8)
         except Exception as e:
             logger.warning(f"Could not load dedicated clock fonts, falling back to display_manager fonts: {e}")
             self.ampm_font = self.display_manager.small_font

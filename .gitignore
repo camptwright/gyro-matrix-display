@@ -66,3 +66,4 @@ token.pickle
 # System files
 *.service.bak
 
+assets/fonts/.pil-cache/

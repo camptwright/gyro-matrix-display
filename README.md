@@ -11,29 +11,23 @@ also lives on port 5000.
 
 ## Live deployment
 
-| Item | Current state (verified 2026-08-16) |
+| Item | Current state (verified 2026-09-30) |
 |---|---|
-| Host | `raspberrypi` at `192.168.8.126`, user `reekpi`, aarch64 |
+| Host | `raspberrypi` at `192.168.20.11`, user `reekpi`, aarch64 |
 | Path | `/home/reekpi/matrix-display` |
-| Services | `matrix-display.service` and `web-config.service`, active and enabled |
-| Health | `http://192.168.8.126:5000/healthz` |
+| Service | `matrix-display.service` (runs `web_config.py`), active and enabled |
+| Health | `http://192.168.20.11:5000/healthz`; live frame at `/api/preview.png` |
 | Runtime | Host-native Python/systemd; deliberately not containerized |
 | K3s | Not installed; swap remains enabled |
 
-> **Pending deployment gap**: this repo no longer matches the table above —
-> the BLE gyro remote (`receiver.py`, `arduino_controller.ino`) has been
-> removed and its control moved into `web_config.py`'s "Remote Control"
-> panel, and the two systemd services have been collapsed into one
-> (`matrix-display.service`, now pointed at `web_config.py`; `web-config.service`
-> deleted). The live Pi still runs the old two-service/BLE setup until this
-> is deployed and its old units disabled by hand — see `PI-PREP.md` for the
-> tracked gap.
+The live checkout's working tree was committed to this repo on
+2026-09-30 (branch `fix-scores-fonts-logos`), so the repo and the Pi now
+match. Deploy by copying changed files and restarting the service; the Pi's
+own `git` checkout is still at an older commit.
 
-The live checkout tracks `git@github.com:reek4/gyro-matrix-display.git`, while
-this workspace tracks `git@github.com:camptwright/gyro-matrix-display.git`.
-The Pi also contains substantial uncommitted changes. Reconcile ownership and
-diffs before treating either remote as deployment authority; do not copy this
-checkout over the live tree wholesale.
+Fonts: layouts use native-size bitmap fonts via `pixel_fonts.py` (5x7, 6x9,
+4x6 BDF, plus PressStart2P at its native 8px). Don't render PressStart2P
+below 8px - it misdraws letters and digits on the panel.
 
 ## Development setup
 
