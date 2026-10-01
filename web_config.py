@@ -8,7 +8,7 @@ the display + exposes live remote-control actions (mode switching,
 in-mode navigation) that used to come from a BLE gyroscope remote.
 """
 
-from flask import Flask, render_template_string, request, jsonify, send_from_directory
+from flask import Flask, render_template_string, request, jsonify, send_from_directory, Response
 import json
 import os
 import sys
@@ -36,8 +36,8 @@ def load_config():
         "clock_locations": [],
         "sports": [],
         "favorite_teams": [],
-        "stocks": [],
-        "crypto": [],
+        "stocks": {"enabled": True, "symbols": []},
+        "crypto": {"enabled": True, "symbols": []},
         "fantasy_players": [],
         "weather_locations": [],
         "fantasy_mode": {
@@ -261,35 +261,88 @@ HTML_TEMPLATE = """
 <head>
     <title>Matrix Display Configuration</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="/static/htmx.min.js"></script>
     <style>
+        :root {
+            --bg-1: #667eea; --bg-2: #764ba2;
+            --container-bg: #ffffff; --heading: #333;
+            --section-bg: #f8f9fa; --section-heading: #667eea;
+            --label: #555; --input-border: #ddd;
+            --input-bg: #ffffff; --input-text: #1a1a1a;
+            --accent: #667eea; --accent-hover: #5568d3;
+            --item-bg: #ffffff; --item-border: #ddd;
+            --muted: #666;
+        }
+        body.dark-mode {
+            --bg-1: #0f172a; --bg-2: #1e1b4b;
+            --container-bg: #1e293b; --heading: #e2e8f0;
+            --section-bg: #0f172a; --section-heading: #a5b4fc;
+            --label: #94a3b8; --input-border: #334155;
+            --input-bg: #0f172a; --input-text: #e2e8f0;
+            --accent: #818cf8; --accent-hover: #6366f1;
+            --item-bg: #0f172a; --item-border: #334155;
+            --muted: #94a3b8;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, var(--bg-1) 0%, var(--bg-2) 100%);
             padding: 20px;
             min-height: 100vh;
+            transition: background 0.2s ease;
         }
+        .header-row {
+            max-width: 1200px;
+            margin: 0 auto 0;
+            display: flex;
+            justify-content: flex-end;
+        }
+        .theme-toggle {
+            background: rgba(255,255,255,0.25);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.4);
+            padding: 8px 14px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        .theme-toggle:hover { background: rgba(255,255,255,0.35); }
+        .remote-link {
+            display: inline-block;
+            background: rgba(255,255,255,0.25);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.4);
+            padding: 8px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            margin: 0 10px 10px 0;
+            text-decoration: none;
+        }
+        .remote-link:hover { background: rgba(255,255,255,0.35); }
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            background: white;
+            background: var(--container-bg);
             border-radius: 10px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
             padding: 30px;
+            transition: background 0.2s ease;
         }
         h1 {
-            color: #333;
+            color: var(--heading);
             margin-bottom: 30px;
             text-align: center;
         }
         .section {
             margin-bottom: 40px;
             padding: 20px;
-            background: #f8f9fa;
+            background: var(--section-bg);
             border-radius: 8px;
+            transition: background 0.2s ease;
         }
         .section h2 {
-            color: #667eea;
+            color: var(--section-heading);
             margin-bottom: 15px;
             font-size: 1.5em;
         }
@@ -299,22 +352,24 @@ HTML_TEMPLATE = """
         label {
             display: block;
             margin-bottom: 5px;
-            color: #555;
+            color: var(--label);
             font-weight: 500;
         }
         input, select {
             width: 100%;
             padding: 10px;
-            border: 2px solid #ddd;
+            border: 2px solid var(--input-border);
             border-radius: 5px;
             font-size: 14px;
+            background: var(--input-bg);
+            color: var(--input-text);
         }
         input:focus, select:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: var(--accent);
         }
         button {
-            background: #667eea;
+            background: var(--accent);
             color: white;
             border: none;
             padding: 10px 20px;
@@ -325,7 +380,7 @@ HTML_TEMPLATE = """
             margin-top: 10px;
         }
         button:hover {
-            background: #5568d3;
+            background: var(--accent-hover);
         }
         button.danger {
             background: #e74c3c;
@@ -337,11 +392,11 @@ HTML_TEMPLATE = """
             margin-top: 15px;
         }
         .item {
-            background: white;
+            background: var(--item-bg);
             padding: 15px;
             margin-bottom: 10px;
             border-radius: 5px;
-            border: 1px solid #ddd;
+            border: 1px solid var(--item-border);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -364,7 +419,7 @@ HTML_TEMPLATE = """
         .brightness-value {
             font-size: 1.2em;
             font-weight: bold;
-            color: #667eea;
+            color: var(--accent);
             min-width: 50px;
         }
         .success {
@@ -403,19 +458,64 @@ HTML_TEMPLATE = """
             margin: 0;
         }
         .current-mode-label {
-            color: #555;
+            color: var(--muted);
             margin-bottom: 10px;
         }
         .current-mode-label strong {
-            color: #667eea;
+            color: var(--accent);
+        }
+        .preview-wrap {
+            display: flex;
+            justify-content: center;
+            background: #000;
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .live-preview-img {
+            width: 100%;
+            max-width: 512px;
+            height: auto;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            border-radius: 4px;
+        }
+        .live-preview-img.preview-offline {
+            opacity: 0.3;
+        }
+        .preview-hint {
+            text-align: center;
+            font-size: 0.85em;
+            color: var(--text-secondary, #888);
+            margin-top: 8px;
         }
     </style>
 </head>
 <body>
+    <div class="header-row">
+        <a class="remote-link" href="/remote" target="_blank">📱 Open Remote Control</a>
+        <button class="theme-toggle" onclick="toggleTheme()">
+            <span id="themeIcon">🌙</span> <span id="themeText">Dark Mode</span>
+        </button>
+    </div>
     <div class="container">
         <h1>🎮 Matrix Display Configuration</h1>
 
         <div id="message"></div>
+
+        <!-- Live Preview: mirrors the exact frame currently pushed to the
+             real 64x32 panel, served by /api/preview.png (MatrixDisplay's
+             last_frame, scaled 8x with nearest-neighbor so it reads as
+             LEDs rather than a blurry photo). Polled on a plain interval
+             rather than push/websocket - simplest thing that works for a
+             ~3fps display and one viewer at a time. -->
+        <div class="section">
+            <h2>Live Preview</h2>
+            <div class="preview-wrap">
+                <img id="livePreview" src="/api/preview.png" alt="Live matrix display preview"
+                     class="live-preview-img" onerror="this.classList.add('preview-offline')">
+            </div>
+            <p class="preview-hint">Updates ~3x/second - this is the exact frame the physical panel is showing.</p>
+        </div>
 
         <!-- Remote Control (replaces the old BLE gyroscope remote) -->
         <div class="section">
@@ -439,40 +539,46 @@ HTML_TEMPLATE = """
         <!-- Clock Locations -->
         <div class="section">
             <h2>Clock Locations (Time Zones)</h2>
-            <div class="form-group">
-                <label>Location Name:</label>
-                <input type="text" id="clockName" placeholder="e.g., New York">
-            </div>
-            <div class="form-group">
-                <label>Time Zone:</label>
-                <select id="clockTimezone">
-                    <option value="America/New_York">America/New_York (EST/EDT)</option>
-                    <option value="America/Chicago">America/Chicago (CST/CDT)</option>
-                    <option value="America/Denver">America/Denver (MST/MDT)</option>
-                    <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
-                    <option value="Europe/London">Europe/London (GMT/BST)</option>
-                    <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
-                    <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
-                    <option value="UTC">UTC</option>
-                </select>
-            </div>
-            <button onclick="addClockLocation()">Add Location</button>
-            <div class="item-list" id="clockList"></div>
+            <form hx-post="/htmx/clock/add" hx-target="#clockList" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) this.reset()">
+                <div class="form-group">
+                    <label>Location Name:</label>
+                    <input type="text" name="name" placeholder="e.g., New York" required>
+                </div>
+                <div class="form-group">
+                    <label>Time Zone:</label>
+                    <select name="timezone">
+                        <option value="America/New_York">America/New_York (EST/EDT)</option>
+                        <option value="America/Chicago">America/Chicago (CST/CDT)</option>
+                        <option value="America/Denver">America/Denver (MST/MDT)</option>
+                        <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
+                        <option value="Europe/London">Europe/London (GMT/BST)</option>
+                        <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
+                        <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                        <option value="UTC">UTC</option>
+                    </select>
+                </div>
+                <button type="submit">Add Location</button>
+            </form>
+            <div class="item-list" id="clockList">{{ clock_fragment|safe }}</div>
         </div>
         
         <!-- Sports -->
         <div class="section">
             <h2>Sports</h2>
-            <div class="form-group">
-                <label>Sport Name:</label>
-                <input type="text" id="sportName" placeholder="e.g., NBA, NFL, MLB">
-            </div>
-            <div class="form-group">
-                <label>Team/League ID (optional):</label>
-                <input type="text" id="sportId" placeholder="e.g., team abbreviation">
-            </div>
-            <button onclick="addSport()">Add Sport</button>
-            <div class="item-list" id="sportsList"></div>
+            <form hx-post="/htmx/sports/add" hx-target="#sportsList" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) this.reset()">
+                <div class="form-group">
+                    <label>Sport Name:</label>
+                    <input type="text" name="name" placeholder="e.g., NBA, NFL, MLB" required>
+                </div>
+                <div class="form-group">
+                    <label>Team/League ID (optional):</label>
+                    <input type="text" name="id" placeholder="e.g., team abbreviation">
+                </div>
+                <button type="submit">Add Sport</button>
+            </form>
+            <div class="item-list" id="sportsList">{{ sports_fragment|safe }}</div>
         </div>
         
         <!-- Favorite Teams -->
@@ -481,23 +587,26 @@ HTML_TEMPLATE = """
             <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
                 Add your favorite teams to see their games first in sports mode. Games involving your favorite teams will be shown in a separate "Favorites" section.
             </p>
-            <div class="form-group">
-                <label>League/Sport:</label>
-                <select id="favoriteSport">
-                    <option value="nfl">NFL</option>
-                    <option value="nba">NBA</option>
-                    <option value="mlb">MLB</option>
-                    <option value="nhl">NHL</option>
-                    <option value="ncaaf">NCAAF</option>
-                    <option value="ncaam">NCAAM</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Team Name or Abbreviation:</label>
-                <input type="text" id="favoriteTeam" placeholder="e.g., LAL, Patriots, Yankees" style="text-transform: uppercase;">
-            </div>
-            <button onclick="addFavoriteTeam()">Add Favorite Team</button>
-            <div class="item-list" id="favoritesList"></div>
+            <form hx-post="/htmx/favorites/add" hx-target="#favoritesList" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) this.reset()">
+                <div class="form-group">
+                    <label>League/Sport:</label>
+                    <select name="sport">
+                        <option value="nfl">NFL</option>
+                        <option value="nba">NBA</option>
+                        <option value="mlb">MLB</option>
+                        <option value="nhl">NHL</option>
+                        <option value="ncaaf">NCAAF</option>
+                        <option value="ncaam">NCAAM</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Team Name or Abbreviation:</label>
+                    <input type="text" name="team" placeholder="e.g., LAL, Patriots, Yankees" style="text-transform: uppercase;" required>
+                </div>
+                <button type="submit">Add Favorite Team</button>
+            </form>
+            <div class="item-list" id="favoritesList">{{ favorites_fragment|safe }}</div>
         </div>
         
         <!-- Fantasy Players -->
@@ -512,24 +621,27 @@ HTML_TEMPLATE = """
             <p style="font-size: 0.9em; color: #666; margin-bottom: 15px;">
                 Add players to track their stats in fantasy mode. Supports NFL, NBA, and NHL. Use up/down flicks to cycle through sports, left/right to navigate players within each sport.
             </p>
-            <div class="form-group">
-                <label>Sport:</label>
-                <select id="fantasySport">
-                    <option value="nfl">NFL</option>
-                    <option value="nba">NBA</option>
-                    <option value="nhl">NHL</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Player Name:</label>
-                <input type="text" id="fantasyPlayerName" placeholder="e.g., Patrick Mahomes, Travis Kelce">
-            </div>
-            <div class="form-group">
-                <label>Team Abbreviation:</label>
-                <input type="text" id="fantasyTeam" placeholder="e.g., KC, BUF, SF" style="text-transform: uppercase;">
-            </div>
-            <button onclick="addFantasyPlayer()">Add Fantasy Player</button>
-            <div class="item-list" id="fantasyPlayersList"></div>
+            <form hx-post="/htmx/fantasy/add" hx-target="#fantasyPlayersList" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) this.reset()">
+                <div class="form-group">
+                    <label>Sport:</label>
+                    <select name="sport">
+                        <option value="nfl">NFL</option>
+                        <option value="nba">NBA</option>
+                        <option value="nhl">NHL</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Player Name:</label>
+                    <input type="text" name="name" placeholder="e.g., Patrick Mahomes, Travis Kelce" required>
+                </div>
+                <div class="form-group">
+                    <label>Team Abbreviation:</label>
+                    <input type="text" name="team" placeholder="e.g., KC, BUF, SF" style="text-transform: uppercase;" required>
+                </div>
+                <button type="submit">Add Fantasy Player</button>
+            </form>
+            <div class="item-list" id="fantasyPlayersList">{{ fantasy_fragment|safe }}</div>
         </div>
         
         <!-- Stocks -->
@@ -541,23 +653,29 @@ HTML_TEMPLATE = """
                     Enable Stocks/Crypto Mode
                 </label>
             </div>
-            <div class="form-group">
-                <label>Stock Ticker:</label>
-                <input type="text" id="stockTicker" placeholder="e.g., AAPL, MSFT, GOOGL" style="text-transform: uppercase;">
-            </div>
-            <button onclick="addStock()">Add Stock</button>
-            <div class="item-list" id="stocksList"></div>
+            <form hx-post="/htmx/stocks/add" hx-target="#stocksList" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) this.reset()">
+                <div class="form-group">
+                    <label>Stock Ticker:</label>
+                    <input type="text" name="ticker" placeholder="e.g., AAPL, MSFT, GOOGL" style="text-transform: uppercase;" required>
+                </div>
+                <button type="submit">Add Stock</button>
+            </form>
+            <div class="item-list" id="stocksList">{{ stocks_fragment|safe }}</div>
         </div>
         
         <!-- Crypto -->
         <div class="section">
             <h2>Cryptocurrency</h2>
-            <div class="form-group">
-                <label>Crypto Ticker:</label>
-                <input type="text" id="cryptoTicker" placeholder="e.g., BTC, ETH, DOGE" style="text-transform: uppercase;">
-            </div>
-            <button onclick="addCrypto()">Add Crypto</button>
-            <div class="item-list" id="cryptoList"></div>
+            <form hx-post="/htmx/crypto/add" hx-target="#cryptoList" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) this.reset()">
+                <div class="form-group">
+                    <label>Crypto Ticker:</label>
+                    <input type="text" name="ticker" placeholder="e.g., BTC, ETH, DOGE" style="text-transform: uppercase;" required>
+                </div>
+                <button type="submit">Add Crypto</button>
+            </form>
+            <div class="item-list" id="cryptoList">{{ crypto_fragment|safe }}</div>
         </div>
         
         <!-- Weather Locations -->
@@ -569,29 +687,28 @@ HTML_TEMPLATE = """
                     Enable Weather Mode
                 </label>
             </div>
-            <div class="form-group">
-                <label>Location Name:</label>
-                <input type="text" id="weatherName" placeholder="e.g., New York">
-            </div>
-            <div class="form-group">
-                <label>City:</label>
-                <input type="text" id="weatherCity" placeholder="e.g., New York">
-            </div>
-            <div class="form-group">
-                <label>State/Country:</label>
-                <input type="text" id="weatherState" placeholder="e.g., NY, US">
-            </div>
-            <div class="form-group">
-                <label>OpenWeatherMap API Key:</label>
-                <input type="text" id="weatherApiKey" placeholder="Your API key">
-            </div>
-            <button onclick="addWeatherLocation()">Add Location</button>
-            <div class="item-list" id="weatherList"></div>
+            <form hx-post="/htmx/weather/add" hx-target="#weatherList" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) this.reset()">
+                <div class="form-group">
+                    <label>Location Name:</label>
+                    <input type="text" name="name" placeholder="e.g., New York" required>
+                </div>
+                <div class="form-group">
+                    <label>City:</label>
+                    <input type="text" name="city" placeholder="e.g., New York" required>
+                </div>
+                <div class="form-group">
+                    <label>State/Country:</label>
+                    <input type="text" name="state" placeholder="e.g., NY, US" required>
+                </div>
+                <button type="submit">Add Location</button>
+            </form>
+            <div class="item-list" id="weatherList">{{ weather_fragment|safe }}</div>
         </div>
         
         <!-- Music Configuration -->
         <div class="section">
-            <h2>Music (Spotify/YouTube Music)</h2>
+            <h2>Music (Spotify)</h2>
             <div class="form-group">
                 <label>
                     <input type="checkbox" id="musicEnabled" onchange="updateMusicEnabled()">
@@ -602,7 +719,6 @@ HTML_TEMPLATE = """
                 <label>Preferred Source:</label>
                 <select id="musicSource">
                     <option value="spotify">Spotify</option>
-                    <option value="ytm">YouTube Music</option>
                 </select>
             </div>
             <div class="form-group">
@@ -656,6 +772,19 @@ HTML_TEMPLATE = """
     
     <script>
         let config = {{ config_json|safe }};
+
+        // ─── Live Preview polling ──────────────────────────────────────
+        // Plain interval + cache-busting query param, not a websocket -
+        // the display only renders ~10x/second at most (see
+        // DisplayController.update_interval), so anything push-based
+        // would be a lot of machinery for a ~3fps still image.
+        (function pollPreview() {
+            const img = document.getElementById('livePreview');
+            if (!img) return;
+            setInterval(() => {
+                img.src = '/api/preview.png?t=' + Date.now();
+            }, 300);
+        })();
         
         function showMessage(text, isError = false) {
             const msg = document.getElementById('message');
@@ -930,107 +1059,11 @@ HTML_TEMPLATE = """
         }
         
         function renderLists() {
-            // Clock locations
-            const clockList = document.getElementById('clockList');
-            clockList.innerHTML = config.clock_locations.map((item, idx) => `
-                <div class="item">
-                    <div class="item-info">
-                        <strong>${item.name}</strong> - ${item.timezone}
-                    </div>
-                    <div class="item-actions">
-                        <button class="danger" onclick="removeItem('clock_locations', ${idx})">Remove</button>
-                    </div>
-                </div>
-            `).join('');
-            
-            // Sports
-            const sportsList = document.getElementById('sportsList');
-            sportsList.innerHTML = config.sports.map((item, idx) => `
-                <div class="item">
-                    <div class="item-info">
-                        <strong>${item.name}</strong>${item.id ? ' - ' + item.id : ''}
-                    </div>
-                    <div class="item-actions">
-                        <button class="danger" onclick="removeItem('sports', ${idx})">Remove</button>
-                    </div>
-                </div>
-            `).join('');
-            
-            // Stocks
-            const stocksList = document.getElementById('stocksList');
-            stocksList.innerHTML = config.stocks.map((item, idx) => `
-                <div class="item">
-                    <div class="item-info">
-                        <strong>${item}</strong>
-                    </div>
-                    <div class="item-actions">
-                        <button class="danger" onclick="removeItem('stocks', ${idx})">Remove</button>
-                    </div>
-                </div>
-            `).join('');
-            
-            // Crypto
-            const cryptoList = document.getElementById('cryptoList');
-            cryptoList.innerHTML = config.crypto.map((item, idx) => `
-                <div class="item">
-                    <div class="item-info">
-                        <strong>${item}</strong>
-                    </div>
-                    <div class="item-actions">
-                        <button class="danger" onclick="removeItem('crypto', ${idx})">Remove</button>
-                    </div>
-                </div>
-            `).join('');
-            
-            // Weather
-            const weatherList = document.getElementById('weatherList');
-            weatherList.innerHTML = config.weather_locations.map((item, idx) => `
-                <div class="item">
-                    <div class="item-info">
-                        <strong>${item.name}</strong> - ${item.city}, ${item.state}
-                    </div>
-                    <div class="item-actions">
-                        <button class="danger" onclick="removeItem('weather_locations', ${idx})">Remove</button>
-                    </div>
-                </div>
-            `).join('');
-            
-            // Favorite Teams
-            if (!config.favorite_teams) {
-                config.favorite_teams = [];
-            }
-            const favoritesList = document.getElementById('favoritesList');
-            if (favoritesList) {
-                favoritesList.innerHTML = config.favorite_teams.map((item, idx) => `
-                    <div class="item">
-                        <div class="item-info">
-                            <strong>${item.team}</strong> - ${item.sport.toUpperCase()}
-                        </div>
-                        <div class="item-actions">
-                            <button class="danger" onclick="removeItem('favorite_teams', ${idx})">Remove</button>
-                        </div>
-                    </div>
-                `).join('');
-            }
-            
-            // Fantasy Players
-            if (!config.fantasy_players) {
-                config.fantasy_players = [];
-            }
-            const fantasyPlayersList = document.getElementById('fantasyPlayersList');
-            if (fantasyPlayersList) {
-                fantasyPlayersList.innerHTML = config.fantasy_players.map((item, idx) => `
-                    <div class="item">
-                        <div class="item-info">
-                            <strong>${item.name}</strong> - ${item.team || 'N/A'} (${item.sport ? item.sport.toUpperCase() : 'NFL'})
-                        </div>
-                        <div class="item-actions">
-                            <button class="danger" onclick="removeItem('fantasy_players', ${idx})">Remove</button>
-                        </div>
-                    </div>
-                `).join('');
-            }
-            
+            // Clock locations, sports, favorite teams, and fantasy
+            // players are now server-rendered fragments too - see
+            // their htmx forms. Same reasoning as stocks/crypto/weather
+            // above: no client-side copy to fall out of sync.
+
             // Fantasy configuration
             if (!config.fantasy_mode) {
                 config.fantasy_mode = { enabled: true };
@@ -1092,137 +1125,12 @@ HTML_TEMPLATE = """
             }
         }
         
-        function addClockLocation() {
-            const name = document.getElementById('clockName').value.trim();
-            const timezone = document.getElementById('clockTimezone').value;
-            if (!name) {
-                showMessage('Please enter a location name', true);
-                return;
-            }
-            config.clock_locations.push({ name, timezone });
-            document.getElementById('clockName').value = '';
-            renderLists();
-        }
-        
-        function addSport() {
-            const name = document.getElementById('sportName').value.trim();
-            const id = document.getElementById('sportId').value.trim();
-            if (!name) {
-                showMessage('Please enter a sport name', true);
-                return;
-            }
-            config.sports.push({ name, id: id || null });
-            document.getElementById('sportName').value = '';
-            document.getElementById('sportId').value = '';
-            renderLists();
-        }
-        
-        function addStock() {
-            const ticker = document.getElementById('stockTicker').value.trim().toUpperCase();
-            if (!ticker) {
-                showMessage('Please enter a stock ticker', true);
-                return;
-            }
-            if (config.stocks.includes(ticker)) {
-                showMessage('Stock already added', true);
-                return;
-            }
-            config.stocks.push(ticker);
-            document.getElementById('stockTicker').value = '';
-            renderLists();
-        }
-        
-        function addCrypto() {
-            const ticker = document.getElementById('cryptoTicker').value.trim().toUpperCase();
-            if (!ticker) {
-                showMessage('Please enter a crypto ticker', true);
-                return;
-            }
-            if (config.crypto.includes(ticker)) {
-                showMessage('Crypto already added', true);
-                return;
-            }
-            config.crypto.push(ticker);
-            document.getElementById('cryptoTicker').value = '';
-            renderLists();
-        }
-        
-        function addWeatherLocation() {
-            const name = document.getElementById('weatherName').value.trim();
-            const city = document.getElementById('weatherCity').value.trim();
-            const state = document.getElementById('weatherState').value.trim();
-            const apiKey = document.getElementById('weatherApiKey').value.trim();
-            if (!name || !city || !state) {
-                showMessage('Please fill in all weather location fields', true);
-                return;
-            }
-            config.weather_locations.push({ name, city, state, api_key: apiKey });
-            document.getElementById('weatherName').value = '';
-            document.getElementById('weatherCity').value = '';
-            document.getElementById('weatherState').value = '';
-            renderLists();
-        }
-        
-        function addFavoriteTeam() {
-            if (!config.favorite_teams) {
-                config.favorite_teams = [];
-            }
-            const sport = document.getElementById('favoriteSport').value.trim().toLowerCase();
-            const team = document.getElementById('favoriteTeam').value.trim().toUpperCase();
-            if (!sport || !team) {
-                showMessage('Please select a league and enter a team name/abbreviation', true);
-                return;
-            }
-            // Check for duplicates
-            const isDuplicate = config.favorite_teams.some(item => 
-                item.sport.toLowerCase() === sport.toLowerCase() && 
-                item.team.toUpperCase() === team.toUpperCase()
-            );
-            if (isDuplicate) {
-                showMessage('This team is already in your favorites', true);
-                return;
-            }
-            config.favorite_teams.push({ sport, team });
-            document.getElementById('favoriteTeam').value = '';
-            renderLists();
-        }
-        
-        function addFantasyPlayer() {
-            if (!config.fantasy_players) {
-                config.fantasy_players = [];
-            }
-            const sport = document.getElementById('fantasySport').value.trim().toLowerCase();
-            const name = document.getElementById('fantasyPlayerName').value.trim();
-            const team = document.getElementById('fantasyTeam').value.trim().toUpperCase();
-            if (!name) {
-                showMessage('Please enter a player name', true);
-                return;
-            }
-            if (!team) {
-                showMessage('Please enter a team abbreviation', true);
-                return;
-            }
-            // Check for duplicates
-            const isDuplicate = config.fantasy_players.some(item => 
-                item.name.toLowerCase() === name.toLowerCase() && 
-                item.team && item.team.toUpperCase() === team.toUpperCase() &&
-                item.sport && item.sport.toLowerCase() === sport.toLowerCase()
-            );
-            if (isDuplicate) {
-                showMessage('This player is already in your fantasy list', true);
-                return;
-            }
-            config.fantasy_players.push({ name, team, sport: sport || 'nfl' });
-            document.getElementById('fantasyPlayerName').value = '';
-            document.getElementById('fantasyTeam').value = '';
-            renderLists();
-        }
-        
-        function removeItem(listName, index) {
-            config[listName].splice(index, 1);
-            renderLists();
-        }
-        
+        // addClockLocation()/addSport()/addFavoriteTeam()/addFantasyPlayer()
+        // removed - their forms now submit via htmx directly.
+
+        // removeItem() removed - no remaining callers now that every
+        // list section uses its own htmx delete route directly.
+
         async function saveConfig() {
             try {
                 // Update fantasy config from form
@@ -1301,6 +1209,25 @@ HTML_TEMPLATE = """
             }
         }
         
+        function toggleTheme() {
+            const isDark = document.body.classList.toggle('dark-mode');
+            document.getElementById('themeIcon').textContent = isDark ? '☀️' : '🌙';
+            document.getElementById('themeText').textContent = isDark ? 'Light Mode' : 'Dark Mode';
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+        }
+
+        function loadTheme() {
+            const saved = localStorage.getItem('theme');
+            const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const useDark = saved ? saved === 'dark' : prefersDark;
+            if (useDark) {
+                document.body.classList.add('dark-mode');
+                document.getElementById('themeIcon').textContent = '☀️';
+                document.getElementById('themeText').textContent = 'Light Mode';
+            }
+        }
+        loadTheme();
+
         // Initialize
         renderLists();
         loadImageLists();
@@ -1310,6 +1237,366 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+
+# ─── htmx-managed lists ─────────────────────────────────────────────────
+# Stocks, crypto, and weather locations moved off the page-load-then-mutate-
+# a-JS-blob pattern that caused real bugs (a client-side type mismatch
+# silently broke every section rendered after it). Each of these routes is
+# the sole authority for its list: it reads config.json, mutates just its
+# own key, saves, and returns the updated fragment - no shared client state
+# to get out of sync with the backend's actual schema.
+
+from markupsafe import escape as _esc
+
+
+def _render_ticker_list(list_key, symbols):
+    if not symbols:
+        return ""
+    items = []
+    for idx, ticker in enumerate(symbols):
+        items.append(f'''
+            <div class="item">
+                <div class="item-info"><strong>{_esc(ticker)}</strong></div>
+                <div class="item-actions">
+                    <button class="danger" hx-delete="/htmx/{list_key}/remove/{idx}"
+                            hx-target="#{list_key}List" hx-swap="innerHTML"
+                            hx-confirm="Remove {_esc(ticker)}?">Remove</button>
+                </div>
+            </div>''')
+    return "".join(items)
+
+
+def _render_weather_list(locations):
+    if not locations:
+        return ""
+    items = []
+    for idx, loc in enumerate(locations):
+        name = _esc(loc.get("name", ""))
+        city = _esc(loc.get("city", ""))
+        state = _esc(loc.get("state", ""))
+        items.append(f'''
+            <div class="item">
+                <div class="item-info"><strong>{name}</strong> - {city}, {state}</div>
+                <div class="item-actions">
+                    <button class="danger" hx-delete="/htmx/weather/remove/{idx}"
+                            hx-target="#weatherList" hx-swap="innerHTML"
+                            hx-confirm="Remove {name}?">Remove</button>
+                </div>
+            </div>''')
+    return "".join(items)
+
+
+@app.route('/htmx/stocks/add', methods=['POST'])
+def htmx_add_stock():
+    ticker = request.form.get('ticker', '').strip().upper()
+    config = load_config()
+    stocks = config.setdefault('stocks', {})
+    symbols = stocks.setdefault('symbols', [])
+    if ticker and ticker not in symbols:
+        symbols.append(ticker)
+        save_config(config)
+        if display_controller is not None:
+            try:
+                display_controller.reload_config()
+            except Exception as e:
+                print(f"Could not reload config after stock add: {e}")
+    return _render_ticker_list('stocks', symbols)
+
+
+@app.route('/htmx/stocks/remove/<int:idx>', methods=['DELETE'])
+def htmx_remove_stock(idx):
+    config = load_config()
+    symbols = config.setdefault('stocks', {}).setdefault('symbols', [])
+    if 0 <= idx < len(symbols):
+        symbols.pop(idx)
+        save_config(config)
+        if display_controller is not None:
+            try:
+                display_controller.reload_config()
+            except Exception as e:
+                print(f"Could not reload config after stock remove: {e}")
+    return _render_ticker_list('stocks', symbols)
+
+
+@app.route('/htmx/crypto/add', methods=['POST'])
+def htmx_add_crypto():
+    ticker = request.form.get('ticker', '').strip().upper()
+    config = load_config()
+    crypto = config.setdefault('crypto', {})
+    symbols = crypto.setdefault('symbols', [])
+    if ticker and ticker not in symbols:
+        symbols.append(ticker)
+        save_config(config)
+        if display_controller is not None:
+            try:
+                display_controller.reload_config()
+            except Exception as e:
+                print(f"Could not reload config after crypto add: {e}")
+    return _render_ticker_list('crypto', symbols)
+
+
+@app.route('/htmx/crypto/remove/<int:idx>', methods=['DELETE'])
+def htmx_remove_crypto(idx):
+    config = load_config()
+    symbols = config.setdefault('crypto', {}).setdefault('symbols', [])
+    if 0 <= idx < len(symbols):
+        symbols.pop(idx)
+        save_config(config)
+        if display_controller is not None:
+            try:
+                display_controller.reload_config()
+            except Exception as e:
+                print(f"Could not reload config after crypto remove: {e}")
+    return _render_ticker_list('crypto', symbols)
+
+
+@app.route('/htmx/weather/add', methods=['POST'])
+def htmx_add_weather():
+    name = request.form.get('name', '').strip()
+    city = request.form.get('city', '').strip()
+    state = request.form.get('state', '').strip()
+    config = load_config()
+    locations = config.setdefault('weather_locations', [])
+    if name and city and state:
+        locations.append({'name': name, 'city': city, 'state': state})
+        save_config(config)
+        if display_controller is not None:
+            try:
+                display_controller.reload_config()
+            except Exception as e:
+                print(f"Could not reload config after weather add: {e}")
+    return _render_weather_list(locations)
+
+
+@app.route('/htmx/weather/remove/<int:idx>', methods=['DELETE'])
+def htmx_remove_weather(idx):
+    config = load_config()
+    locations = config.setdefault('weather_locations', [])
+    if 0 <= idx < len(locations):
+        locations.pop(idx)
+        save_config(config)
+        if display_controller is not None:
+            try:
+                display_controller.reload_config()
+            except Exception as e:
+                print(f"Could not reload config after weather remove: {e}")
+    return _render_weather_list(locations)
+
+
+# ─── htmx-managed lists, part 2 ────────────────────────────────────────
+# Same pattern as stocks/crypto/weather above: each route is the sole
+# authority for its own config key.
+
+def _render_clock_list(locations):
+    if not locations:
+        return ""
+    items = []
+    for idx, loc in enumerate(locations):
+        name = _esc(loc.get("name", ""))
+        tz = _esc(loc.get("timezone", ""))
+        items.append(f'''
+            <div class="item">
+                <div class="item-info"><strong>{name}</strong> - {tz}</div>
+                <div class="item-actions">
+                    <button class="danger" hx-delete="/htmx/clock/remove/{idx}"
+                            hx-target="#clockList" hx-swap="innerHTML"
+                            hx-confirm="Remove {name}?">Remove</button>
+                </div>
+            </div>''')
+    return "".join(items)
+
+
+def _render_sports_list(sports):
+    if not sports:
+        return ""
+    items = []
+    for idx, item in enumerate(sports):
+        name = _esc(item.get("name", ""))
+        sid = item.get("id")
+        suffix = f" - {_esc(sid)}" if sid else ""
+        items.append(f'''
+            <div class="item">
+                <div class="item-info"><strong>{name}</strong>{suffix}</div>
+                <div class="item-actions">
+                    <button class="danger" hx-delete="/htmx/sports/remove/{idx}"
+                            hx-target="#sportsList" hx-swap="innerHTML"
+                            hx-confirm="Remove {name}?">Remove</button>
+                </div>
+            </div>''')
+    return "".join(items)
+
+
+def _render_favorites_list(teams):
+    if not teams:
+        return ""
+    items = []
+    for idx, item in enumerate(teams):
+        team = _esc(item.get("team", ""))
+        sport = _esc(item.get("sport", "").upper())
+        items.append(f'''
+            <div class="item">
+                <div class="item-info"><strong>{team}</strong> - {sport}</div>
+                <div class="item-actions">
+                    <button class="danger" hx-delete="/htmx/favorites/remove/{idx}"
+                            hx-target="#favoritesList" hx-swap="innerHTML"
+                            hx-confirm="Remove {team}?">Remove</button>
+                </div>
+            </div>''')
+    return "".join(items)
+
+
+def _render_fantasy_list(players):
+    if not players:
+        return ""
+    items = []
+    for idx, item in enumerate(players):
+        name = _esc(item.get("name", ""))
+        team = _esc(item.get("team") or "N/A")
+        sport = _esc((item.get("sport") or "nfl").upper())
+        items.append(f'''
+            <div class="item">
+                <div class="item-info"><strong>{name}</strong> - {team} ({sport})</div>
+                <div class="item-actions">
+                    <button class="danger" hx-delete="/htmx/fantasy/remove/{idx}"
+                            hx-target="#fantasyPlayersList" hx-swap="innerHTML"
+                            hx-confirm="Remove {name}?">Remove</button>
+                </div>
+            </div>''')
+    return "".join(items)
+
+
+def _reload_controller():
+    if display_controller is not None:
+        try:
+            display_controller.reload_config()
+        except Exception as e:
+            print(f"Could not reload config: {e}")
+
+
+@app.route('/htmx/clock/add', methods=['POST'])
+def htmx_add_clock():
+    name = request.form.get('name', '').strip()
+    timezone = request.form.get('timezone', '').strip()
+    config = load_config()
+    locations = config.setdefault('clock_locations', [])
+    if name and timezone:
+        locations.append({'name': name, 'timezone': timezone})
+        save_config(config)
+        _reload_controller()
+    return _render_clock_list(locations)
+
+
+@app.route('/htmx/clock/remove/<int:idx>', methods=['DELETE'])
+def htmx_remove_clock(idx):
+    config = load_config()
+    locations = config.setdefault('clock_locations', [])
+    if 0 <= idx < len(locations):
+        locations.pop(idx)
+        save_config(config)
+        _reload_controller()
+    return _render_clock_list(locations)
+
+
+@app.route('/htmx/sports/add', methods=['POST'])
+def htmx_add_sport():
+    name = request.form.get('name', '').strip()
+    sport_id = request.form.get('id', '').strip()
+    config = load_config()
+    sports = config.setdefault('sports', [])
+    if name:
+        sports.append({'name': name, 'id': sport_id or None})
+        save_config(config)
+        _reload_controller()
+    return _render_sports_list(sports)
+
+
+@app.route('/htmx/sports/remove/<int:idx>', methods=['DELETE'])
+def htmx_remove_sport(idx):
+    config = load_config()
+    sports = config.setdefault('sports', [])
+    if 0 <= idx < len(sports):
+        sports.pop(idx)
+        save_config(config)
+        _reload_controller()
+    return _render_sports_list(sports)
+
+
+@app.route('/htmx/favorites/add', methods=['POST'])
+def htmx_add_favorite():
+    sport = request.form.get('sport', '').strip().lower()
+    team = request.form.get('team', '').strip().upper()
+    config = load_config()
+    teams = config.setdefault('favorite_teams', [])
+    if sport and team:
+        is_duplicate = any(
+            t.get('sport', '').lower() == sport and t.get('team', '').upper() == team
+            for t in teams
+        )
+        if not is_duplicate:
+            teams.append({'sport': sport, 'team': team})
+            save_config(config)
+            _reload_controller()
+    return _render_favorites_list(teams)
+
+
+@app.route('/htmx/favorites/remove/<int:idx>', methods=['DELETE'])
+def htmx_remove_favorite(idx):
+    config = load_config()
+    teams = config.setdefault('favorite_teams', [])
+    if 0 <= idx < len(teams):
+        teams.pop(idx)
+        save_config(config)
+        _reload_controller()
+    return _render_favorites_list(teams)
+
+
+@app.route('/htmx/fantasy/add', methods=['POST'])
+def htmx_add_fantasy():
+    sport = request.form.get('sport', '').strip().lower() or 'nfl'
+    name = request.form.get('name', '').strip()
+    team = request.form.get('team', '').strip().upper()
+    config = load_config()
+    players = config.setdefault('fantasy_players', [])
+    if name and team:
+        is_duplicate = any(
+            p.get('name', '').lower() == name.lower()
+            and (p.get('team') or '').upper() == team
+            and (p.get('sport') or '').lower() == sport
+            for p in players
+        )
+        if not is_duplicate:
+            players.append({'name': name, 'team': team, 'sport': sport})
+            save_config(config)
+            _reload_controller()
+    return _render_fantasy_list(players)
+
+
+@app.route('/htmx/fantasy/remove/<int:idx>', methods=['DELETE'])
+def htmx_remove_fantasy(idx):
+    config = load_config()
+    players = config.setdefault('fantasy_players', [])
+    if 0 <= idx < len(players):
+        players.pop(idx)
+        save_config(config)
+        _reload_controller()
+    return _render_fantasy_list(players)
+
+
+@app.route('/api/preview.png')
+def preview_png():
+    """Live PNG of the exact frame last pushed toward the real panel -
+    powers the dashboard's Live Preview card. Scaled 8x with nearest-
+    neighbor in MatrixDisplay.get_preview_png() so it reads as a matrix
+    of LEDs rather than a blurry photo."""
+    if display_controller is None or getattr(display_controller, 'matrix', None) is None:
+        return jsonify({"error": "Display controller not running"}), 503
+    png_bytes = display_controller.matrix.get_preview_png(scale=8)
+    if png_bytes is None:
+        return jsonify({"error": "No frame rendered yet"}), 503
+    return Response(png_bytes, mimetype='image/png', headers={
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+    })
 
 
 @app.route('/healthz')
@@ -1322,9 +1609,23 @@ def healthz():
 def index():
     """Main configuration page"""
     config = load_config()
+    stocks_fragment = _render_ticker_list('stocks', config.get('stocks', {}).get('symbols', []))
+    crypto_fragment = _render_ticker_list('crypto', config.get('crypto', {}).get('symbols', []))
+    weather_fragment = _render_weather_list(config.get('weather_locations', []))
+    clock_fragment = _render_clock_list(config.get('clock_locations', []))
+    sports_fragment = _render_sports_list(config.get('sports', []))
+    favorites_fragment = _render_favorites_list(config.get('favorite_teams', []))
+    fantasy_fragment = _render_fantasy_list(config.get('fantasy_players', []))
     return render_template_string(HTML_TEMPLATE,
                                  config_json=json.dumps(config),
-                                 brightness=config.get('brightness', 50))
+                                 brightness=config.get('brightness', 50),
+                                 stocks_fragment=stocks_fragment,
+                                 crypto_fragment=crypto_fragment,
+                                 weather_fragment=weather_fragment,
+                                 clock_fragment=clock_fragment,
+                                 sports_fragment=sports_fragment,
+                                 favorites_fragment=favorites_fragment,
+                                 fantasy_fragment=fantasy_fragment)
 
 
 _REMOTE_DIR = os.path.join(_script_dir, "matrix-display-remote")
@@ -1353,17 +1654,25 @@ def save_config_api():
     """Save configuration and reload display controller"""
     try:
         config = request.json
+        # stocks/crypto/weather_locations are now managed server-side by
+        # the /htmx/* routes below, saved individually as each add/remove
+        # happens. This bulk save still covers everything else on the page
+        # (brightness, sports, favorites, fantasy, music, images config) -
+        # but must not let a stale in-browser copy of the htmx-managed
+        # lists overwrite what's actually on disk.
+        current = load_config()
+        for key in ("stocks", "crypto", "weather_locations", "clock_locations", "sports", "favorite_teams", "fantasy_players"):
+            config[key] = current.get(key, config.get(key))
         if save_config(config):
-            # Try to reload display controller config
+            # web_config.py and the DisplayController share one process
+            # since the BLE-remote refactor - call reload_config() directly
+            # instead of touching a file for the update loop to notice up to
+            # 2 seconds later (the old shape, from when these were separate
+            # processes talking over a shared filesystem).
             try:
-                import signal
-                import os
-                # Send SIGHUP to matrix-display service to reload config
-                # Or use a simpler approach: touch a reload file
-                reload_file = "/tmp/matrix_display_reload"
-                with open(reload_file, 'w') as f:
-                    f.write(str(time.time()))
-                os.chmod(reload_file, 0o666)
+                if display_controller is not None:
+                    display_controller.reload_config()
+                    display_controller._load_image_lists()
             except Exception as reload_err:
                 # Reload failed, but config was saved
                 print(f"Could not trigger config reload: {reload_err}")
@@ -1422,14 +1731,12 @@ def upload_image():
         
         print(f"File saved successfully: {filepath}, size: {os.path.getsize(filepath)} bytes")
         
-        # Trigger reload of image lists
-        reload_file = "/tmp/matrix_display_reload"
+        # Trigger reload of image lists - direct call, see save_config()
         try:
-            with open(reload_file, 'w') as f:
-                f.write(str(time.time()))
-            os.chmod(reload_file, 0o666)
+            if display_controller is not None:
+                display_controller._load_image_lists()
         except Exception as reload_err:
-            print(f"Warning: Could not create reload file: {reload_err}")
+            print(f"Warning: Could not reload image lists: {reload_err}")
         
         return jsonify({"success": True, "filename": filename})
     except Exception as e:
@@ -1482,11 +1789,9 @@ def delete_image(type, filename):
         if os.path.exists(filepath):
             os.remove(filepath)
             
-            # Trigger reload of image lists
-            reload_file = "/tmp/matrix_display_reload"
-            with open(reload_file, 'w') as f:
-                f.write(str(time.time()))
-            os.chmod(reload_file, 0o666)
+            # Trigger reload of image lists - direct call, see save_config()
+            if display_controller is not None:
+                display_controller._load_image_lists()
             
             return jsonify({"success": True})
         else:
@@ -1499,5 +1804,5 @@ if __name__ == '__main__':
     start_display_controller()
     print("Starting web configuration server on http://localhost:5000")
     print("Access from your Pi's IP address or localhost")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, load_dotenv=False)
 

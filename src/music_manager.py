@@ -12,7 +12,9 @@ import queue # Added import
 
 # Use relative imports for clients within the same package (src)
 from .spotify_client import SpotifyClient
-from .ytm_client import YTMClient
+# YTMClient import removed - YouTube Music support disabled (unused).
+# self.ytm is permanently None below, which every YTM-gated branch in
+# this file already treats as "disabled" - see MusicManager.__init__.
 # Removed: import config
 
 # Import the API counter function from web interface
@@ -97,7 +99,7 @@ class MusicManager:
             self.polling_interval = music_config.get("POLLING_INTERVAL_SECONDS", default_interval)
             configured_source = music_config.get("preferred_source", "spotify").lower()
 
-            if configured_source in ["spotify", "ytm"]:
+            if configured_source in ["spotify"]:
                 self.preferred_source = configured_source
                 logging.info(f"Music manager enabled. Polling interval: {self.polling_interval}s. Preferred source: {self.preferred_source}")
             else:
@@ -133,15 +135,10 @@ class MusicManager:
             self.spotify = None # Ensure it's None if not preferred
 
         # Initialize YTM Client if needed
-        if self.preferred_source == "ytm":
-            try:
-                self.ytm = YTMClient(update_callback=self._handle_ytm_direct_update)
-                logging.info(f"YTMClient initialized. Connection will be managed on-demand. Configured URL: {self.ytm.base_url}")
-            except Exception as e:
-                logging.error(f"Failed to initialize YTM client: {e}")
-                self.ytm = None
-        else:
-            self.ytm = None # Ensure it's None if not preferred
+        # YouTube Music support removed - self.ytm stays permanently None,
+        # which every "if self.ytm and ..." branch elsewhere in this class
+        # already treats as fully disabled.
+        self.ytm = None
 
     def _process_ytm_data_update(self, ytm_data, source_description: str):
         """
