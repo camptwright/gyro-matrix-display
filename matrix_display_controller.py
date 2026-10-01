@@ -315,6 +315,11 @@ class MatrixDisplay:
         return self.image.height if self.image else 32
 
 
+# Favorite-team games are pulled and shown only within this many days
+# before and after now, for every team and sport.
+FAVORITES_WINDOW_DAYS = 7
+
+
 class DisplayController:
     """Main display controller managing all modes"""
     
@@ -655,7 +660,12 @@ class DisplayController:
                     logger.error(f"Error preloading favorites cache: {e}")
                     import traceback
                     traceback.print_exc()
+                finally:
+                    self._favorites_fetch_running = False
             
+            # Shares the display path's single-flight flag, so the first
+            # frames don't start a second full fetch alongside this one.
+            self._favorites_fetch_running = True
             import threading
             preload_thread = threading.Thread(target=preload_favorites, daemon=True)
             preload_thread.start()
@@ -995,6 +1005,18 @@ class DisplayController:
                 continue
         return False
 
+    @staticmethod
+    def _within_window(game, now, days):
+        """True if the game starts within +/-days of now (UTC-aware)."""
+        from datetime import datetime, timezone
+        try:
+            start = datetime.fromisoformat((game.get('date') or '').replace('Z', '+00:00'))
+        except ValueError:
+            return False
+        if not start.tzinfo:
+            start = start.replace(tzinfo=timezone.utc)
+        return abs((start - now).total_seconds()) <= days * 86400
+
     def _favorites_cache_ttl(self):
         return 60 if self._has_active_game(self.favorites_cache) else 300
 
@@ -1023,10 +1045,13 @@ class DisplayController:
         
         logger.debug(f"Looking for favorite teams by sport: {favorite_teams_by_sport}")
         
-        # Get current time for comparison
-        from datetime import datetime
-        now = datetime.now()
+        # Get current time for comparison. UTC-aware: game dates are UTC,
+        # and comparing them (tz stripped) against local naive time put
+        # every game 5 hours off on this CDT host.
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
         current_time = time.time()
+        window = FAVORITES_WINDOW_DAYS
         
         # Cache date range fetches for 10 minutes to avoid blocking
         DATE_RANGE_CACHE_TTL = 600  # 10 minutes
@@ -1047,47 +1072,19 @@ class DisplayController:
                     # Fetch games using sport-specific date ranges
                     from sports_fetcher import fetch_espn_scores_for_date_range, fetch_espn_scores_for_week, fetch_ncaaf_games_with_week_iteration
                     
+                    # Every sport pulls the same window: FAVORITES_WINDOW_DAYS
+                    # back and ahead (games outside it are dropped below too).
                     if sport_id == 'nfl':
-                        # NFL: last week + this week. This used to reuse
-                        # sports_data_cache['nfl'], which nothing refreshes
-                        # when only favorites are shown - Sunday's games sat
-                        # at 0-0 "scheduled" for days after they ended.
+                        # ESPN returns nothing for NFL date ranges, so fetch
+                        # by week number (last, this, next) and let the
+                        # window filter trim the edges.
                         from sports_fetcher import fetch_nfl_recent_weeks
                         all_games = fetch_nfl_recent_weeks()
-                        logger.info(f"Fetched NFL games for last week + this week ({len(all_games)} games)")
-                    elif sport_id == 'ncaaf':
-                        # NCAAF: For each favorite team, iterate through weeks until games found
-                        all_games = []
-                        for team_abbr in team_set:
-                            team_games = fetch_ncaaf_games_with_week_iteration(team_abbr, max_weeks_back=4)
-                            all_games.extend(team_games)
-                        # Remove duplicates
-                        seen_games = set()
-                        unique_games = []
-                        for game in all_games:
-                            game_key = (
-                                game.get('date', ''),
-                                game.get('home_team', ''),
-                                game.get('away_team', '')
-                            )
-                            if game_key not in seen_games:
-                                seen_games.add(game_key)
-                                unique_games.append(game)
-                        all_games = unique_games
-                        logger.info(f"Fetched NCAAF games for favorite teams ({len(all_games)} unique games)")
-                    elif sport_id in ['nba', 'nhl']:
-                        # NBA/NHL: Previous day, today, next day (3 days)
-                        all_games = fetch_espn_scores_for_date_range(sport_id, days_back=1, days_forward=1)
-                        logger.info(f"Fetched {sport_id} games for previous day, today, next day ({len(all_games)} games)")
-                    elif sport_id in ['ncaam', 'ncaab']:
-                        # NCAAM: Previous 2 days, next 5 days (7 days)
-                        # Use 'ncaam' as the canonical sport_id for fetching
-                        all_games = fetch_espn_scores_for_date_range('ncaam', days_back=2, days_forward=5)
-                        logger.info(f"Fetched ncaam games for previous 2 days, next 5 days ({len(all_games)} games)")
                     else:
-                        # Default: 3 days back, 7 days forward
-                        all_games = fetch_espn_scores_for_date_range(sport_id, days_back=3, days_forward=7)
-                        logger.info(f"Fetched {sport_id} games with default date range ({len(all_games)} games)")
+                        all_games = fetch_espn_scores_for_date_range(
+                            'ncaam' if sport_id == 'ncaab' else sport_id,
+                            days_back=window, days_forward=window)
+                    logger.info(f"Fetched {sport_id} games for +/-{window} days ({len(all_games)} games)")
                     
                     # Cache the results
                     self.date_range_cache[sport_id] = (all_games, current_time)
@@ -1114,16 +1111,18 @@ class DisplayController:
                                         # Try parsing as YYYY-MM-DDTHH:MM:SS
                                         game_date = datetime.fromisoformat(date_str.split('.')[0])
                                     
-                                    # Make timezone-naive for comparison
-                                    if game_date.tzinfo:
-                                        game_date = game_date.replace(tzinfo=None)
+                                    if not game_date.tzinfo:
+                                        game_date = game_date.replace(tzinfo=timezone.utc)
                                 except Exception as e:
                                     logger.debug(f"Error parsing date '{date_str}': {e}")
                                     continue
                             
                             if game_date:
+                                time_diff = (game_date - now).total_seconds()
+                                if abs(time_diff) > window * 86400:
+                                    continue
                                 game['_parsed_date'] = game_date
-                                game['_time_diff'] = (game_date - now).total_seconds()
+                                game['_time_diff'] = time_diff
                                 team_games.append(game)
                     
                     # Find closest previous and next games
@@ -1182,7 +1181,8 @@ class DisplayController:
             for game in games:
                 away_team = game.get('away_team', '').upper().strip()
                 home_team = game.get('home_team', '').upper().strip()
-                if away_team in favorite_team_set or home_team in favorite_team_set:
+                if (away_team in favorite_team_set or home_team in favorite_team_set) \
+                        and self._within_window(game, now, window):
                     # Check if we already added this game
                     if not any(
                         g.get('away_team') == game.get('away_team') and

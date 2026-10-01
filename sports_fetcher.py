@@ -501,8 +501,8 @@ def fetch_ncaaf_games_with_week_iteration(team_abbr: str, max_weeks_back: int = 
 
 
 def fetch_nfl_recent_weeks() -> List[Dict[str, Any]]:
-    """Games from the current NFL week and the one before it, so a
-    favorite's last result stays on screen until its next game."""
+    """Games from last, this and next NFL week - enough to cover +/-7 days
+    from any day of the week (callers trim to the exact window)."""
     url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
     try:
         data = requests.get(url, timeout=10).json()
@@ -512,7 +512,7 @@ def fetch_nfl_recent_weeks() -> List[Dict[str, Any]]:
         logger.error(f"Could not read current NFL week: {e}")
         return fetch_espn_scores_for_week('nfl', 0)
     games, seen = [], set()
-    for wk in (week - 1, week):
+    for wk in (week - 1, week, week + 1):
         if wk < 1:
             continue
         for g in fetch_espn_scores_for_week('nfl', extra_params={'week': wk, 'seasontype': season_type}):
@@ -521,6 +521,10 @@ def fetch_nfl_recent_weeks() -> List[Dict[str, Any]]:
                 seen.add(key)
                 games.append(g)
     return games
+
+
+# (sport, YYYYMMDD) -> games, for past days where every game is final
+_finished_days: Dict[tuple, List[Dict[str, Any]]] = {}
 
 
 def fetch_espn_scores_for_date_range(sport: str, days_back: int = 7, days_forward: int = 14) -> List[Dict[str, Any]]:
@@ -538,19 +542,30 @@ def fetch_espn_scores_for_date_range(sport: str, days_back: int = 7, days_forwar
     all_games = []
     today = datetime.now()
     
-    # Fetch games for each day in the range
+    # Fetch games for each day in the range. A past day whose games are
+    # all final can't change, so it's fetched once and reused - a 15-day
+    # window then costs ~8 requests per refresh, not 15.
     for day_offset in range(-days_back, days_forward + 1):
         target_date = today + timedelta(days=day_offset)
         date_str = target_date.strftime('%Y%m%d')
-        
+        cache_key = (str(sport).lower(), date_str)
+        if cache_key in _finished_days:
+            all_games.extend(_finished_days[cache_key])
+            continue
         try:
-            # Use the existing fetch_espn_scores but with date parameter
             games = fetch_espn_scores_for_date(sport, date_str)
             if games:
                 all_games.extend(games)
+            if day_offset < 0 and all(g.get('is_final') or 'CANCEL' in (g.get('status_id') or '').upper()
+                                      or 'POSTPONED' in (g.get('status_id') or '').upper() for g in games):
+                _finished_days[cache_key] = games
         except Exception as e:
             logger.debug(f"Error fetching games for {sport} on {date_str}: {e}")
             continue
+    # Forget days that have aged out of any window
+    oldest = (today - timedelta(days=days_back + 1)).strftime('%Y%m%d')
+    for key in [k for k in _finished_days if k[1] < oldest]:
+        del _finished_days[key]
     
     # Remove duplicates (same game might appear in multiple date queries)
     seen_games = set()
@@ -622,6 +637,10 @@ def fetch_espn_scores_for_date(sport: str, date_str: str) -> List[Dict[str, Any]
         if sport_str in ['ncaam', 'ncaab']:
             params['limit'] = '500'
             params['groups'] = '50'
+        # NCAAF: all of FBS, not just ESPN's featured/top-25 games
+        elif sport_str == 'ncaaf':
+            params['limit'] = '500'
+            params['groups'] = '80'
         
         response = requests.get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
